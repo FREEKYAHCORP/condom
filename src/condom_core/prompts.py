@@ -17,6 +17,8 @@ BANNED_ENCOUNTER_WORDS = {
     "should",
 }
 
+FEED_SELECTION_PROMPT_VERSION = "usersim_feed_selection_v0"
+
 
 def validate_encounter_prompt(text: str) -> None:
     import re
@@ -46,3 +48,28 @@ def build_prompt(
     )
     validate_encounter_prompt(prompt)
     return prompt
+
+
+def build_feed_selection_prompt(
+    candidate_window: str,
+    feed_precision: str,
+    feed_exploration: str,
+    feed_balanced: str,
+    identity_revealed: str = "",
+    identity_endorsed: str = "",
+    state_preamble: str = "ordinary scroll session. a few minutes to look around.",
+    curation_target: str = "choose 10-15 items",
+) -> str:
+    template = (PROMPTS / "usersim_feed_selection_v0.txt").read_text(encoding="utf-8")
+    validate_encounter_prompt(template)
+    return (
+        template.replace("{{CANDIDATE_WINDOW}}", candidate_window)
+        .replace("{{FEED_PRECISION}}", feed_precision)
+        .replace("{{FEED_EXPLORATION}}", feed_exploration)
+        .replace("{{FEED_BALANCED}}", feed_balanced)
+        .replace("{{STATE_PREAMBLE}}", state_preamble)
+        .replace("{{IDENTITY_REVEALED}}", identity_revealed.strip() or "(not specified)")
+        .replace("{{IDENTITY_ENDORSED}}", identity_endorsed.strip() or "(not specified)")
+        .replace("{{CURATION_TARGET}}", curation_target)
+    )
+

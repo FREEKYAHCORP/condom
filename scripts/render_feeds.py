@@ -11,17 +11,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from condom_core.config import RUNS
+from condom_core.config import DB_PATH, RUNS
 from condom_core.db import connect
-
-
-ARM_LABELS = {
-    "native_x_order": "Native X",
-    "bm25_saved_profile": "BM25 Profile",
-    "tfidf_saved_profile": "TF-IDF Profile",
-    "cheap_combo_v0": "Cheap Combo",
-    "llm_usersim_encounter": "LLM UserSim",
-}
+from condom_core.feed_report import (
+    PREFERRED_SIDE_BY_SIDE_ARMS,
+    arm_display_label,
+    load_latest_feed_runs,
+    render_feed_run_ratio_cards,
+)
 
 
 STYLE = """
@@ -323,7 +320,7 @@ def arms_for_session(conn, session_id: str) -> list[str]:
         """,
         (session_id,),
     ).fetchall()
-    order = ["native_x_order", "bm25_saved_profile", "tfidf_saved_profile", "cheap_combo_v0", "llm_usersim_encounter"]
+    order = ["native_x_order", "bm25_saved_profile", "tfidf_saved_profile", "cheap_combo_v0", "m3_feed_selection_v0", "llm_usersim_encounter"]
     present = {row["arm"] for row in rows}
     return [arm for arm in order if arm in present] + sorted(present - set(order))
 
@@ -355,7 +352,7 @@ def page(title: str, session_id: str, body: str, nav: str) -> str:
 def nav_html(arms: list[str]) -> str:
     links = ['<a href="../index.html">Index</a>', '<a href="side_by_side.html">Side by side</a>']
     for arm in arms:
-        links.append(f'<a href="{slug(arm)}.html">{esc(ARM_LABELS.get(arm, arm))}</a>')
+        links.append(f'<a href="{slug(arm)}.html">{esc(arm_display_label(arm))}</a>')
     links.append('<button data-export-labels>Export labels</button>')
     return '<div class="nav">' + "\n".join(links) + "</div>"
 
@@ -435,14 +432,14 @@ def render_arm_page(output: Path, session_id: str, arm: str, rows: list[dict], a
         for idx, row in enumerate(ordered, start=1):
             parts.append(tweet_card(row, idx <= 12))
         parts.append("</div></section>")
-    title = f"{ARM_LABELS.get(arm, arm)} Feed"
+    title = f"{arm_display_label(arm)} Feed"
     output.write_text(page(title, session_id, "\n".join(parts), nav_html(arms)), encoding="utf-8")
 
 
 def render_side_by_side(output: Path, session_id: str, rows_by_arm: dict[str, list[dict]], arms: list[str]) -> None:
-    compare_arms = [arm for arm in ["native_x_order", "cheap_combo_v0", "llm_usersim_encounter"] if arm in rows_by_arm]
+    compare_arms = [arm for arm in PREFERRED_SIDE_BY_SIDE_ARMS if arm in rows_by_arm]
     by_arm_batch = {arm: batches(rows_by_arm[arm]) for arm in compare_arms}
-    batch_ids = sorted({bid for arm_batches in by_arm_batch.values() for bid in arm_batches})
+    batch_ids = sorted({bid for arm_batches in by_arm_batch.values() for bid in arm_batches}, key=lambda bid: "" if bid is None else str(bid))
     parts = [
         '<div class="toolbar">',
         '<input class="search" data-search placeholder="Search side-by-side cards">',
@@ -459,7 +456,7 @@ def render_side_by_side(output: Path, session_id: str, rows_by_arm: dict[str, li
                 by_arm_batch[arm].get(batch_id, []),
                 key=lambda r: (r["rank"] is None, r["rank"] or 999999, r["original_rank"] or 999999),
             )[:12]
-            parts.append(f'<div class="column"><div class="column-title">{esc(ARM_LABELS.get(arm, arm))}</div>')
+            parts.append(f'<div class="column"><div class="column-title">{esc(arm_display_label(arm))}</div>')
             for row in rows:
                 parts.append(tweet_card(row, True))
             parts.append("</div>")
@@ -467,13 +464,20 @@ def render_side_by_side(output: Path, session_id: str, rows_by_arm: dict[str, li
     output.write_text(page("Side-by-Side Top 12", session_id, "\n".join(parts), nav_html(arms)), encoding="utf-8")
 
 
-def render_index(output: Path, session_id: str, run_dir: Path, scores: list[dict], arms: list[str]) -> None:
+def render_index(
+    output: Path,
+    session_id: str,
+    run_dir: Path,
+    scores: list[dict],
+    arms: list[str],
+    conn,
+) -> None:
     metric_cards = []
     for score in scores:
         metric_cards.append(
             f"""
 <div class="metric">
-  <b>{esc(ARM_LABELS.get(score["arm"], score["arm"]))}</b>
+  <b>{esc(arm_display_label(score["arm"]))}</b>
   <div class="muted">save_fbeta {fmt_num(score.get("save_fbeta"))}</div>
   <div>false pulls {esc(score.get("false_pull_count"))}</div>
   <div>stop acc {fmt_num(score.get("stop_accuracy"))}</div>
@@ -485,7 +489,7 @@ def render_index(output: Path, session_id: str, run_dir: Path, scores: list[dict
     for score in scores:
         rows.append(
             "<tr>"
-            f"<td>{esc(ARM_LABELS.get(score['arm'], score['arm']))}</td>"
+            f"<td>{esc(arm_display_label(score['arm']))}</td>"
             f"<td>{esc(score.get('n_exposed'))}</td>"
             f"<td>{esc(score.get('n_saves'))}</td>"
             f"<td>{fmt_num(score.get('save_fbeta'))}</td>"
@@ -495,14 +499,19 @@ def render_index(output: Path, session_id: str, run_dir: Path, scores: list[dict
             "</tr>"
         )
     feed_links = ["<ul>"]
-    feed_links.append('<li><a href="feeds/side_by_side.html">Side-by-side top 12: Native vs Cheap Combo vs LLM</a></li>')
+    feed_links.append(
+        '<li><a href="feeds/side_by_side.html">Side-by-side top 12: Native vs Cheap Combo vs M3</a></li>'
+    )
     for arm in arms:
-        feed_links.append(f'<li><a href="feeds/{slug(arm)}.html">{esc(ARM_LABELS.get(arm, arm))} ranked feed</a></li>')
+        feed_links.append(f'<li><a href="feeds/{slug(arm)}.html">{esc(arm_display_label(arm))} ranked feed</a></li>')
     feed_links.append("</ul>")
     body = f"""
 <h2>Review Feeds</h2>
 <p class="muted">These are frozen HTML views over the captured candidates. Rankings are applied within each 40-item batch.</p>
 {''.join(feed_links)}
+<h2>Feed run ratios</h2>
+<p class="muted">Latest feed_runs per arm: coverage and curation over the x_returned_candidates window.</p>
+{render_feed_run_ratio_cards(load_latest_feed_runs(conn, session_id), escape=esc)}
 <h2>Current Scores</h2>
 <div class="grid metrics">{''.join(metric_cards)}</div>
 <h2>Metrics Table</h2>
@@ -520,9 +529,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--run-dir")
+    parser.add_argument("--db-path", default=None)
     args = parser.parse_args()
 
-    conn = connect()
+    db_path = Path(args.db_path) if args.db_path else DB_PATH
+    conn = connect(db_path)
     arms = arms_for_session(conn, args.session_id)
     if args.run_dir:
         run_dir = Path(args.run_dir)
@@ -540,7 +551,7 @@ def main() -> None:
     for arm, rows in rows_by_arm.items():
         render_arm_page(feed_dir / f"{slug(arm)}.html", args.session_id, arm, rows, arms)
     render_side_by_side(feed_dir / "side_by_side.html", args.session_id, rows_by_arm, arms)
-    render_index(run_dir / "index.html", args.session_id, run_dir, scores, arms)
+    render_index(run_dir / "index.html", args.session_id, run_dir, scores, arms, conn)
 
     print(json.dumps({
         "run_dir": str(run_dir),

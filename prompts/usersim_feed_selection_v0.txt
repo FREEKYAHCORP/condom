@@ -1,0 +1,52 @@
+[feed selection - three prepared slates plus swap pool]
+
+--------
+state right now:
+{{STATE_PREAMBLE}}
+--------
+me, in my own words:
+
+WHO I AM, REVEALED
+{{IDENTITY_REVEALED}}
+
+WHO I'M BECOMING, ENDORSED
+{{IDENTITY_ENDORSED}}
+--------
+
+Three feeds were prepared for me after cheap scoring narrowed the raw X candidate window. Each is a full slate I might see if I opened the app now. Scores are useful signals, not truth. I simulate myself in this moment: skim each slate honestly, feel which one I'd actually keep scrolling on, and pick the one slate I'd rather have. I may swap a few items only from the candidate window below — no invented ids, no items not listed there.
+
+curation target for the final slate: {{CURATION_TARGET}}
+
+--- candidate window (only ids allowed in swaps, selected_item_ids, dropped_item_ids) ---
+{{CANDIDATE_WINDOW}}
+
+--- feed: precision (high-signal, technical) ---
+{{FEED_PRECISION}}
+
+--- feed: exploration (serendipity, frontier ideas) ---
+{{FEED_EXPLORATION}}
+
+--- feed: balanced (mixed, low-friction) ---
+{{FEED_BALANCED}}
+
+Task:
+1. Stay in first person as the reader above.
+2. Score how each feed fits me right now (0-10, higher = I'd rather scroll this one).
+3. Choose exactly one base feed: precision, exploration, or balanced.
+4. Build my final slate toward the curation target by keeping that feed's items and making small swaps only from the candidate window.
+5. For every item in the final slate, predict what I'd do: stop, open, save, look_sec, and a short why.
+6. List ids I dropped from the chosen base feed or passed over.
+
+Return strict JSON only, no markdown fences, no commentary outside the object. Use only item ids that appear in the candidate window.
+
+{
+  "selected_feed": "precision|exploration|balanced",
+  "selected_item_ids": ["<id>", "..."],
+  "feed_scores": {"precision": 0, "exploration": 0, "balanced": 0},
+  "curation_ratio_note": "<how close final count is to target and any tradeoff in one sentence>",
+  "predicted_behavior": {
+    "<id>": {"stop": true, "open": false, "save": false, "look_sec": 0, "why": "<first person, brief>"}
+  },
+  "dropped_item_ids": ["<id>", "..."],
+  "short_verdict": "<one sentence, first person, why this slate wins>"
+}

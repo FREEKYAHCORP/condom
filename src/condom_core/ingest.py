@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any
+from .models import Item
 
 from .db import insert_events, insert_raw_network_response, upsert_items
-from .parse_x import item_from_dom, parse_response
+
+from .candidate_window import insert_x_returned_candidates, rebuild_candidate_window
+from .parse_x import item_from_dom, parse_response_ordered
 
 
 def normalize_event(ev: dict[str, Any], session_id: str) -> dict[str, Any] | None:
@@ -56,13 +59,21 @@ def ingest_raw_response(
     parsed_count = 0
     error = None
     items = []
+    ordered: list[tuple[Item, int]] = []
+    source = "x_for_you"
     try:
         parsed_body = json.loads(body_text) if isinstance(body_text, str) else body_text
-        items = parse_response(parsed_body, session_id=session_id)
+        ordered = parse_response_ordered(
+            parsed_body,
+            session_id=session_id,
+            source=source,
+        )
+        items = [item for item, _ in ordered]
         parsed_ok = True
         parsed_count = len(items)
     except Exception as exc:  # malformed response bodies are data, not crashes
         error = str(exc)
+    captured = captured_at or datetime.now(timezone.utc).isoformat()
     insert_raw_network_response(
         conn,
         response_id=response_id,
@@ -72,11 +83,21 @@ def ingest_raw_response(
         parsed_ok=parsed_ok,
         parsed_count=parsed_count,
         error=error,
-        captured_at=captured_at,
+        captured_at=captured,
     )
     if items:
         upsert_items(conn, items, datetime.now(timezone.utc).isoformat())
         rebuild_session_order(conn, session_id)
+    if parsed_ok and ordered:
+        insert_x_returned_candidates(
+            conn,
+            session_id=session_id,
+            response_id=response_id,
+            ordered=ordered,
+            source=source,
+            captured_at=captured,
+        )
+        rebuild_candidate_window(conn, session_id, source=source)
     return {"accepted": True, "parsed_ok": parsed_ok, "parsed_count": parsed_count, "error": error}
 
 

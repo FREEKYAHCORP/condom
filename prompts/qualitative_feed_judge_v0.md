@@ -13,9 +13,9 @@ Reader profile:
 - Wants technical depth, code/repo/paper links, and calibrated claims.
 - Wants less ragebait, less Quora-like midwit debate, less generic status flexing, less low-evidence grandstanding.
 
-You will see three feeds: Feed A, Feed B, Feed C. They are unlabeled. One may be native X order, one may be a cheap deterministic reranker, and one may be an LLM/MiniMax reranker. Do not try to guess which system made which feed. Judge only fit to the reader profile.
+You will see three feeds: Feed A, Feed B, Feed C. They are unlabeled. Each feed was produced by a different feed ranking algorithm applied to the same x_returned_candidates candidate window. The three algorithms are independent implementations; you are not told which algorithm produced which feed. Do not try to guess the source system. Judge only fit to the reader profile.
 
-Important: this is a qualitative review, not a scientific result. Do not infer the reader's actual behavior. Do not use engagement counts as evidence of fit. Prefer specific item-level reasons.
+Important: this is a qualitative review, not a scientific result. Do not infer the reader's actual behavior. Do not use engagement counts as evidence of fit. Prefer specific item-level reasons. Refer to items by their position number in each feed (1, 2, 3, …), not by opaque ids.
 
 For each feed, return:
 1. Overall fit score from 0 to 10.

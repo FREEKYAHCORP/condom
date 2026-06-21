@@ -138,6 +138,27 @@ def parse_response(body: dict[str, Any], session_id: str = "", source: str = "x_
             items.append(item)
     return items
 
+def parse_response_ordered(
+    body: dict[str, Any],
+    session_id: str = "",
+    source: str = "x_for_you",
+) -> list[tuple[Item, int]]:
+    """Parse GraphQL body preserving first-seen tweet order with 1-based response ranks."""
+    seen: set[str] = set()
+    ordered: list[tuple[Item, int]] = []
+    response_rank = 0
+    for node in iter_dicts(body):
+        tweet = unwrap_tweet(node)
+        if not tweet:
+            continue
+        item = parse_tweet(tweet, session_id=session_id, source=source)
+        if item and item.item_id not in seen:
+            seen.add(item.item_id)
+            response_rank += 1
+            ordered.append((item, response_rank))
+    return ordered
+
+
 
 def item_from_dom(row: dict[str, Any], session_id: str) -> Item | None:
     item_id = str(row.get("item_id") or "")

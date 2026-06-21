@@ -75,6 +75,38 @@ CREATE TABLE IF NOT EXISTS raw_network_responses (
   captured_at    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS x_returned_candidates (
+  response_id     TEXT NOT NULL,
+  session_id      TEXT NOT NULL,
+  item_id         TEXT NOT NULL,
+  response_rank   INTEGER NOT NULL,
+  source          TEXT NOT NULL,
+  captured_at     TEXT NOT NULL,
+  PRIMARY KEY (response_id, item_id),
+  FOREIGN KEY (response_id) REFERENCES raw_network_responses(response_id),
+  FOREIGN KEY (item_id) REFERENCES items(item_id)
+);
+
+CREATE TABLE IF NOT EXISTS candidate_windows (
+  session_id      TEXT PRIMARY KEY,
+  source          TEXT NOT NULL,
+  rebuilt_at      TEXT NOT NULL,
+  item_count      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS candidate_window_items (
+  session_id           TEXT NOT NULL,
+  item_id              TEXT NOT NULL,
+  window_rank          INTEGER NOT NULL,
+  first_response_id    TEXT NOT NULL,
+  first_captured_at    TEXT NOT NULL,
+  source               TEXT NOT NULL,
+  PRIMARY KEY (session_id, item_id),
+  UNIQUE (session_id, window_rank),
+  FOREIGN KEY (item_id) REFERENCES items(item_id)
+);
+
+
 CREATE TABLE IF NOT EXISTS arm_predictions (
   prediction_id   TEXT PRIMARY KEY,
   arm             TEXT NOT NULL,
@@ -135,6 +167,51 @@ CREATE TABLE IF NOT EXISTS scores (
   look_mae_bucketed REAL,
   created_at        TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS feed_runs (
+  feed_run_id       TEXT PRIMARY KEY,
+  arm               TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  candidate_count   INTEGER NOT NULL,
+  scored_count      INTEGER NOT NULL,
+  curated_count     INTEGER NOT NULL,
+  coverage_ratio    REAL NOT NULL,
+  curation_ratio    REAL NOT NULL,
+  prefilter_count   INTEGER,
+  prefilter_ratio   REAL,
+  curated_k         INTEGER NOT NULL,
+  metrics_json      TEXT NOT NULL,
+  model_call_id     TEXT,
+  prompt_version    TEXT,
+  model_name        TEXT,
+  created_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feed_run_items (
+  feed_run_id   TEXT NOT NULL,
+  item_id       TEXT NOT NULL,
+  feed_rank     INTEGER NOT NULL,
+  PRIMARY KEY (feed_run_id, item_id),
+  UNIQUE (feed_run_id, feed_rank),
+  FOREIGN KEY (feed_run_id) REFERENCES feed_runs(feed_run_id),
+  FOREIGN KEY (item_id) REFERENCES items(item_id)
+);
+
+
+CREATE TABLE IF NOT EXISTS feed_evaluations (
+  evaluation_id      TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL,
+  packet_path        TEXT NOT NULL,
+  key_path           TEXT,
+  meta_path          TEXT,
+  prompt_version     TEXT NOT NULL,
+  label_map_json     TEXT NOT NULL,
+  leakage_ok         INTEGER NOT NULL,
+  leakage_json       TEXT NOT NULL,
+  judge_result_json  TEXT,
+  created_at         TEXT NOT NULL
+);
+
 """
 
 
@@ -284,4 +361,80 @@ def insert_raw_network_response(
 def clear_arm(conn: sqlite3.Connection, arm: str, session_id: str) -> None:
     conn.execute("DELETE FROM arm_predictions WHERE arm=? AND session_id=?", (arm, session_id))
     conn.execute("DELETE FROM scores WHERE arm=? AND session_id=?", (arm, session_id))
+    conn.commit()
+
+
+def insert_feed_run(
+    conn: sqlite3.Connection,
+    *,
+    feed_run_id: str,
+    arm: str,
+    session_id: str,
+    candidate_count: int,
+    scored_count: int,
+    curated_count: int,
+    coverage_ratio: float,
+    curation_ratio: float,
+    curated_k: int,
+    metrics: dict[str, Any],
+    selected_item_ids: list[str],
+    model_call_id: str | None = None,
+    prompt_version: str | None = None,
+    model_name: str | None = None,
+    prefilter_count: int | None = None,
+    prefilter_ratio: float | None = None,
+) -> None:
+    created_at = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO feed_runs (
+          feed_run_id, arm, session_id, candidate_count, scored_count, curated_count,
+          coverage_ratio, curation_ratio, prefilter_count, prefilter_ratio, curated_k,
+          metrics_json, model_call_id, prompt_version, model_name, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            feed_run_id,
+            arm,
+            session_id,
+            candidate_count,
+            scored_count,
+            curated_count,
+            coverage_ratio,
+            curation_ratio,
+            prefilter_count,
+            prefilter_ratio,
+            curated_k,
+            json.dumps(metrics, ensure_ascii=True),
+            model_call_id,
+            prompt_version,
+            model_name,
+            created_at,
+        ),
+    )
+    conn.execute("DELETE FROM feed_run_items WHERE feed_run_id = ?", (feed_run_id,))
+    for rank, item_id in enumerate(selected_item_ids, start=1):
+        conn.execute(
+            """
+            INSERT INTO feed_run_items (feed_run_id, item_id, feed_rank)
+            VALUES (?, ?, ?)
+            """,
+            (feed_run_id, item_id, rank),
+        )
+    conn.commit()
+
+
+def clear_feed_arm(conn: sqlite3.Connection, arm: str, session_id: str) -> None:
+    run_ids = [
+        row["feed_run_id"]
+        for row in conn.execute(
+            "SELECT feed_run_id FROM feed_runs WHERE arm = ? AND session_id = ?",
+            (arm, session_id),
+        ).fetchall()
+    ]
+    for feed_run_id in run_ids:
+        conn.execute("DELETE FROM feed_run_items WHERE feed_run_id = ?", (feed_run_id,))
+    conn.execute("DELETE FROM feed_runs WHERE arm = ? AND session_id = ?", (arm, session_id))
+    conn.execute("DELETE FROM arm_predictions WHERE arm = ? AND session_id = ?", (arm, session_id))
+    conn.execute("DELETE FROM model_calls WHERE arm = ? AND session_id = ?", (arm, session_id))
     conn.commit()
