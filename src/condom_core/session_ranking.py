@@ -126,6 +126,12 @@ class M3Options:
     strict_completeness: bool = False
     max_calls: int | None = None
 
+def _limit_batches(batches: list[tuple[str, list[dict]]], limit: int | None) -> list[tuple[str, list[dict]]]:
+    if limit:
+        return batches[:limit]
+    return batches
+
+
 
 def rank_m3_session(
     conn,
@@ -140,9 +146,7 @@ def rank_m3_session(
     if opts.refresh:
         clear_arm(conn, arm, session_id)
 
-    batches = list(batches_for_session(conn, session_id).items())
-    if opts.limit_batches is not None:
-        batches = batches[: opts.limit_batches]
+    batches = _limit_batches(list(batches_for_session(conn, session_id).items()), opts.limit_batches)
 
     calls_made = 0
     total_written = 0
@@ -281,8 +285,9 @@ def rank_session_arm(
 
     if arm == CHEAP_LINEAR_ARM:
         count = _rank_cheap_linear(conn, session_id, refresh=refresh)
-        status = "skipped" if count == 0 and not can_train(conn, session_id) else "ok"
-        return {"arm": arm, "predictions": count, "status": status, "model_calls": []}
+        status = "ok" if count else "skipped"
+        reason = None if count else "implementation gated until multiple labeled sessions exist"
+        return {"arm": arm, "predictions": count, "status": status, "reason": reason, "model_calls": []}
 
     if arm == M3_ARM:
         opts = m3_options if m3_options is not None else M3Options(refresh=refresh)

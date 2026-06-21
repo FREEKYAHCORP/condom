@@ -66,7 +66,8 @@ def main() -> None:
                 f"parsed {summary['parsed_count']}/{summary['expected_count']}"
             )
     elif result.get("status") == "skipped":
-        print(f"{result['arm']}: skipped, insufficient prior labeled sessions")
+        reason = result.get("reason") or "insufficient prior labeled sessions"
+        print(f"{result['arm']}: skipped, {reason}")
     else:
         print(f"{result['arm']}: wrote {result['predictions']} predictions")
 
