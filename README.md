@@ -103,7 +103,7 @@ CORS is open for local extension use. All ingest endpoints expect JSON bodies ma
 |------|------|
 | `extension/` | MV3 sensor + popup (manifest may still say “Lens M0”) |
 | `src/condom_core/` | DB, ingest, rankers, prompts, FastAPI |
-| `scripts/` | `init_db.py`, `serve_core.py`, offline arm runners, scoring/render |
+| `scripts/` | Thin operator entrypoints over `condom_core` (`init_db.py`, `serve_core.py`, `rank_session.py`, scoring/render) |
 | `prompts/` | Identity bootstrap, Encounter user-sim, qualitative judge templates |
 | `fixtures/x_graphql/` | Minimal GraphQL fixtures for tests |
 | `tests/` | Parser, ranker, prompt, scoring tests |
@@ -122,7 +122,7 @@ python -m pytest -q
 
 ## Offline harness
 
-Scripts under `scripts/` replay stored sessions without the browser—for example `run_native.py`, `run_cheap_combo.py`, `run_m3_usersim.py`, `render_feeds.py`, `score.py`, `compare_arms.py`. Outputs land under `runs/` (feed HTML, judge packets, metrics). This path is optional for understanding rankers; live M0/M1 capture uses extension + core only.
+Scripts under `scripts/` replay stored sessions without the browser—for example `rank_session.py` (offline arms via `--arm` or API `--mode`), `render_feeds.py`, `score.py`, `compare_arms.py`. Ranking logic lives in `src/condom_core/` (`session_ranking.py`, rankers); scripts only parse CLI args and call core. Outputs land under `runs/` (feed HTML, judge packets, metrics). This path is optional for understanding rankers; live M0/M1 capture uses extension + core only.
 
 Qualitative external review (e.g. pasting judge packets into a separate chat model) is explicit egress outside the core measurement loop.
 
