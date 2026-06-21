@@ -1,0 +1,13 @@
+openai
+python-dotenv
+pydantic
+sqlite-utils
+rank-bm25
+scikit-learn
+numpy
+pandas
+scipy
+tqdm
+pytest
+fastapi
+uvicorn[standard]

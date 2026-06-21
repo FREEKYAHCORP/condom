@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 300px; margin: 0; padding: 12px; font: 13px system-ui, sans-serif; color: #111827; }
+    h1 { font-size: 16px; margin: 0 0 8px; }
+    label { display: block; margin: 6px 0; }
+    button { margin: 6px 4px 0 0; padding: 6px 8px; }
+    code { font-size: 11px; word-break: break-all; }
+    .muted { color: #6b7280; }
+    .ok { color: #047857; }
+    .bad { color: #b91c1c; }
+    pre { white-space: pre-wrap; }
+    .hint { margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 6px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Lens M0</h1>
+  <div id="health" class="muted">checking core…</div>
+  <div id="offline-hint" class="hint" style="display:none">Start local core first:<br><code>python scripts\\serve_core.py</code></div>
+  <div class="muted">session</div>
+  <code id="session"></code>
+  <hr>
+  <label><input type="radio" name="mode" value="native"> Native X</label>
+  <label><input type="radio" name="mode" value="cheap"> Cheap reranker</label>
+  <label><input type="radio" name="mode" value="m3"> MiniMax M3</label>
+  <label><input type="checkbox" id="reorder"> experimental DOM reorder</label>
+  <button id="new-session">New session</button>
+  <button id="refresh-rank">Refresh rank</button>
+  <button id="flush">Flush</button>
+  <pre id="status" class="muted"></pre>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+{
+  "data": {
+    "home": {
+      "home_timeline_urt": {
+        "instructions": [
+          {
+            "type": "TimelineAddEntries",
+            "entries": [
+              {
+                "entryId": "tweet-1",
+                "content": {
+                  "entryType": "TimelineTimelineItem",
+                  "itemContent": {
+                    "itemType": "TimelineTweet",
+                    "tweet_results": {
+                      "result": {
+                        "__typename": "Tweet",
+                        "rest_id": "1",
+                        "core": {
+                          "user_results": {
+                            "result": {
+                              "__typename": "User",
+                              "core": {
+                                "screen_name": "example",
+                                "name": "Example User"
+                              },
+                              "legacy": {
+                                "description": "Example bio"
+                              }
+                            }
+                          }
+                        },
+                        "legacy": {
+                          "id_str": "1",
+                          "full_text": "Example captured tweet",
+                          "favorite_count": 1,
+                          "retweet_count": 0,
+                          "reply_count": 0,
+                          "quote_count": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

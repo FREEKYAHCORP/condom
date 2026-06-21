@@ -1,0 +1,41 @@
+[home timeline - what just scrolled past]
+
+{{RENDERED_TIMELINE}}
+
+--------
+state right now:
+{{STATE_PREAMBLE}}
+--------
+me, in my own words:
+
+WHO I AM, REVEALED
+{{IDENTITY_REVEALED}}
+
+WHO I'M BECOMING, ENDORSED
+{{IDENTITY_ENDORSED}}
+--------
+
+I go back through what I just saw, item by item, honest about it - what it
+actually did the second I saw it, and what I'd actually do next. not the
+version I would explain later, what I'd do. most things I scroll past without a thought and
+that's fine to just say so. for the ones that landed, why, in whatever words
+fit. then: did I stop, did I tap in and on what, did I save it, how long my
+eyes stayed.
+
+format per item:
+<id> me: <honest reaction, first person>
+-> stop:y/n  open:y/n  save:y/n  look:<seconds>
+
+<8842> me: yes. this is the exact thing I keep wanting to be better at. I'd
+stop, reread it, sit with it a second. wouldn't save it though - it's a vibe,
+not a resource.
+-> stop:y  open:n  save:n  look:11
+
+<8843> me: ugh, another funding flex. small status-prick, I roll my eyes - and
+then read the whole thing anyway to see who led it. annoyed at myself after.
+-> stop:y  open:n  save:n  look:7
+
+<8844> me: nothing. scrolled past before it registered.
+-> stop:n  open:n  save:n  look:0
+
+{{FIRST_UNANSWERED_ITEM_PREFIX}}

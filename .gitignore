@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local secrets
+.env
+
+# Local captures and generated artifacts
+data/raw/
+data/processed/
+runs/
+*.log
+
+# Browser / OS
+.DS_Store
+Thumbs.db
