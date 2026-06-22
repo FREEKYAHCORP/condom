@@ -18,6 +18,9 @@ WHO I AM, REVEALED
 WHO I'M BECOMING, ENDORSED
 {{IDENTITY_ENDORSED}}
 --------
+LOW-FIT / SUPPRESS (score down; serve false unless unmistakably on-topic):
+{{NEGATIVE_PROFILE}}
+--------
 
 Return one object:
 {

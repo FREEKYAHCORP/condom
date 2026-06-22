@@ -79,12 +79,15 @@ def build_ambient_m3_item_score_prompt(
     identity_revealed: str = "",
     identity_endorsed: str = "",
     state_preamble: str = "ordinary scroll session. a few minutes to look around.",
+    negative_profile: str = "",
 ) -> str:
     template = (PROMPTS / "ambient_m3_item_score_v0.txt").read_text(encoding="utf-8")
+    neg = negative_profile.strip()
     return (
         template.replace("{{CANDIDATE_ITEMS}}", candidate_items)
         .replace("{{STATE_PREAMBLE}}", state_preamble)
         .replace("{{IDENTITY_REVEALED}}", identity_revealed.strip() or "(not specified)")
         .replace("{{IDENTITY_ENDORSED}}", identity_endorsed.strip() or "(not specified)")
+        .replace("{{NEGATIVE_PROFILE}}", neg or "(none specified)")
     )
 

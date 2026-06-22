@@ -11,6 +11,7 @@ venv/
 # Local captures and generated artifacts
 data/raw/
 data/processed/
+data/profile/
 runs/
 *.log
 

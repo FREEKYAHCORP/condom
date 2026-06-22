@@ -14,6 +14,7 @@ from .feed_generation import ModelCallResult, _normalize_model_call_result, load
 from .minimax_client import call_minimax, get_key
 from .parse_llm_outputs import parse_ambient_m3_items_json
 from .prompts import AMBIENT_M3_ITEM_SCORE_PROMPT_VERSION, build_ambient_m3_item_score_prompt
+from .profile import ambient_m3_request_metadata, compile_ambient_m3_prompt_fields, load_active_profile
 
 AMBIENT_M3_ARM = "ambient_m3_item_score_v0"
 AMBIENT_M3_MODEL = "MiniMax-M3"
@@ -334,20 +335,52 @@ def render_ambient_candidate_batch_text(rows: list[dict[str, Any]]) -> str:
         lines.append(f"<{item_id}>\n{rendered}")
     return "\n\n".join(lines)
 
+def _ambient_m3_profile_context(
+    *,
+    identity_revealed: str | None = None,
+    identity_endorsed: str | None = None,
+    state_preamble: str | None = None,
+    negative_profile: str | None = None,
+    profile_version_id: str | None = None,
+) -> tuple[dict[str, str], str]:
+    active = load_active_profile()
+    compiled = compile_ambient_m3_prompt_fields(active)
+    fields = dict(compiled)
+    if identity_revealed is not None:
+        fields["identity_revealed"] = identity_revealed
+    if identity_endorsed is not None:
+        fields["identity_endorsed"] = identity_endorsed
+    if state_preamble is not None:
+        fields["state_preamble"] = state_preamble
+    if negative_profile is not None:
+        fields["negative_profile"] = negative_profile
+    vid = profile_version_id if profile_version_id is not None else str(active["profile_version_id"])
+    return fields, vid
+
 
 def build_m3_item_scoring_prompt(
     rows: list[dict[str, Any]],
     *,
-    identity_revealed: str = "",
-    identity_endorsed: str = "",
-    state_preamble: str = "ordinary scroll session. a few minutes to look around.",
+    identity_revealed: str | None = None,
+    identity_endorsed: str | None = None,
+    state_preamble: str | None = None,
+    negative_profile: str | None = None,
+    profile_version_id: str | None = None,
 ) -> str:
     candidate_ids = [str(r["item_id"]) for r in rows]
-    prompt = build_ambient_m3_item_score_prompt(
-        render_ambient_candidate_batch_text(rows),
+    fields, _vid = _ambient_m3_profile_context(
         identity_revealed=identity_revealed,
         identity_endorsed=identity_endorsed,
         state_preamble=state_preamble,
+        negative_profile=negative_profile,
+        profile_version_id=profile_version_id,
+    )
+    prompt = build_ambient_m3_item_score_prompt(
+        render_ambient_candidate_batch_text(rows),
+        identity_revealed=fields["identity_revealed"],
+        identity_endorsed=fields["identity_endorsed"],
+        state_preamble=fields["state_preamble"],
+        negative_profile=fields["negative_profile"],
     )
     validate_m3_item_scoring_prompt(prompt, candidate_ids)
     return prompt
@@ -371,7 +404,12 @@ def insert_model_call_row(
     latency_ms: int,
     input_tokens: int | None,
     output_tokens: int | None,
+    profile_version_id: str | None = None,
 ) -> None:
+    request_payload = ambient_m3_request_metadata(
+        prompt,
+        profile_version_id or load_active_profile()["profile_version_id"],
+    )
     conn.execute(
         """
         INSERT OR REPLACE INTO model_calls (
@@ -387,7 +425,7 @@ def insert_model_call_row(
             AMBIENT_M3_BATCH_ID,
             AMBIENT_M3_MODEL,
             AMBIENT_M3_ITEM_SCORE_PROMPT_VERSION,
-            json.dumps({"prompt": prompt}, ensure_ascii=True),
+            json.dumps(request_payload, ensure_ascii=True),
             response_text,
             parsed_ok,
             error,
@@ -676,6 +714,12 @@ def score_m3_item_batch(
     session_id: str,
     rows: list[dict[str, Any]],
     model_call: ModelCall,
+    *,
+    identity_revealed: str | None = None,
+    identity_endorsed: str | None = None,
+    state_preamble: str | None = None,
+    negative_profile: str | None = None,
+    profile_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Score one batch; persists model_calls and ambient_m3_item_scores. No network unless model_call does."""
     if not rows:
@@ -687,7 +731,21 @@ def score_m3_item_batch(
         }
 
     candidate_ids = [str(r["item_id"]) for r in rows]
-    prompt = build_m3_item_scoring_prompt(rows)
+    fields, vid = _ambient_m3_profile_context(
+        identity_revealed=identity_revealed,
+        identity_endorsed=identity_endorsed,
+        state_preamble=state_preamble,
+        negative_profile=negative_profile,
+        profile_version_id=profile_version_id,
+    )
+    prompt = build_m3_item_scoring_prompt(
+        rows,
+        identity_revealed=fields["identity_revealed"],
+        identity_endorsed=fields["identity_endorsed"],
+        state_preamble=fields["state_preamble"],
+        negative_profile=fields["negative_profile"],
+        profile_version_id=vid,
+    )
     call_id = f"{AMBIENT_M3_ARM}:{session_id}:{datetime.now(timezone.utc).timestamp()}"
 
     raw = model_call(prompt)
@@ -705,6 +763,7 @@ def score_m3_item_batch(
             latency_ms=latency_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            profile_version_id=vid,
         )
         conn.commit()
         return {
@@ -726,6 +785,7 @@ def score_m3_item_batch(
             latency_ms=latency_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            profile_version_id=vid,
         )
         n = upsert_ambient_m3_scores(conn, session_id, parsed, model_call_id=call_id)
         return {
@@ -746,6 +806,7 @@ def score_m3_item_batch(
             latency_ms=latency_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            profile_version_id=vid,
         )
         conn.commit()
         return {
@@ -765,6 +826,11 @@ def request_m3_scoring_batches(
     model_call: ModelCall | None = None,
     rebuild_snapshot: bool = True,
     active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
+    identity_revealed: str | None = None,
+    identity_endorsed: str | None = None,
+    state_preamble: str | None = None,
+    negative_profile: str | None = None,
+    profile_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Sync: score up to max_batches unscored active-window rows."""
     if batch_size < 1:
@@ -799,6 +865,13 @@ def request_m3_scoring_batches(
     model_call_ids: list[str] = []
     last_error: str | None = None
     snapshot: dict[str, Any] | None = None
+    profile_kwargs = {
+        "identity_revealed": identity_revealed,
+        "identity_endorsed": identity_endorsed,
+        "state_preamble": state_preamble,
+        "negative_profile": negative_profile,
+        "profile_version_id": profile_version_id,
+    }
 
     for _ in range(max_batches):
         batch = load_unscored_candidate_rows(
@@ -806,7 +879,7 @@ def request_m3_scoring_batches(
         )
         if not batch:
             break
-        result = score_m3_item_batch(conn, session_id, batch, call_fn)
+        result = score_m3_item_batch(conn, session_id, batch, call_fn, **profile_kwargs)
         if result.get("model_call_id"):
             model_call_ids.append(str(result["model_call_id"]))
         if result.get("error"):

@@ -3,7 +3,7 @@
   "name": "Lens M0 X Sensor",
   "version": "0.1.0",
   "description": "Passive X candidate/behavior capture and 3-mode Lens experiment toggle.",
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage", "tabs", "sidePanel"],
   "host_permissions": ["https://x.com/*", "https://twitter.com/*", "http://127.0.0.1:8765/*", "http://localhost:8765/*"],
   "background": { "service_worker": "service_worker.js" },
   "content_scripts": [
@@ -19,5 +19,6 @@
       "run_at": "document_start"
     }
   ],
+  "side_panel": { "default_path": "sidepanel.html" },
   "action": { "default_popup": "popup.html", "default_title": "Lens M0" }
 }

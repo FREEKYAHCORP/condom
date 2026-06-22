@@ -27,3 +27,15 @@ class FeedM3RequestIn(BaseModel):
     session_id: str
     batch_size: int = Field(default=50, ge=1, le=64)
     max_batches: int = Field(default=5, ge=1, le=32)
+
+class ProfileUpdateIn(BaseModel):
+    state_preamble: str | None = None
+    identity_revealed: str | None = None
+    identity_endorsed: str | None = None
+    positive_profile: str | None = None
+    negative_profile: str | None = None
+    source: str | None = None
+
+
+class ProfileResetIn(BaseModel):
+    source: str | None = None

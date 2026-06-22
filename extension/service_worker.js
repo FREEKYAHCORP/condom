@@ -6,6 +6,23 @@ const M3_FEED_REQUEST_DEBOUNCE_MS = 1500;
 const queues = { raw: [], items: [], events: [] };
 let flushing = false;
 let m3RequestTimer = null;
+const PROFILE_DEFAULT_FIELDS = {
+  state_preamble: 'ordinary scroll session. a few minutes to look around.',
+  identity_revealed: '',
+  identity_endorsed: '',
+  positive_profile:
+    'machine learning\nagents\nAI infrastructure\nbenchmarks\nevaluations\nopen source\n',
+  negative_profile: '',
+};
+
+const PROFILE_FIELD_KEYS = [
+  'state_preamble',
+  'identity_revealed',
+  'identity_endorsed',
+  'positive_profile',
+  'negative_profile',
+];
+
 
 async function getState() {
   const state = await chrome.storage.local.get(['sessionId', 'mode', 'experimentalReorder']);
@@ -59,6 +76,83 @@ async function postJson(path, payload) {
   });
   return res.json().catch(() => ({ ok: res.ok }));
 }
+
+async function putJson(path, payload) {
+  const base = await coreBase();
+  const res = await fetch(`${base}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({ ok: res.ok }));
+  if (!res.ok) {
+    const err = new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+function profileOfflineResponse(error) {
+  return {
+    ok: false,
+    error: error || 'Condom core is not reachable',
+    offline: true,
+    active: { ...PROFILE_DEFAULT_FIELDS },
+    active_version_id: null,
+    versions: [],
+  };
+}
+
+async function fetchUserProfile() {
+  try {
+    return await getJson('/profile');
+  } catch (err) {
+    return profileOfflineResponse(String(err.message || err));
+  }
+}
+
+async function saveUserProfile(fields) {
+  const payload = { source: 'extension' };
+  for (const key of PROFILE_FIELD_KEYS) {
+    payload[key] = fields?.[key] != null ? String(fields[key]) : '';
+  }
+  return putJson('/profile', payload);
+}
+
+async function resetUserProfile() {
+  const base = await coreBase();
+  const res = await fetch(`${base}/profile/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: 'extension' }),
+  });
+  const body = await res.json().catch(() => ({ ok: res.ok }));
+  if (!res.ok) {
+    const err = new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+function buildProfilePreviewQuery(fields) {
+  if (!fields || typeof fields !== 'object') return '';
+  const params = new URLSearchParams();
+  for (const key of PROFILE_FIELD_KEYS) {
+    if (fields[key] != null) params.set(key, String(fields[key]));
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+async function fetchProfilePromptPreview(fields) {
+  const qs = buildProfilePreviewQuery(fields);
+  return getJson(`/profile/prompt-preview${qs}`);
+}
+
 
 async function health() {
   try {
@@ -224,6 +318,117 @@ setInterval(() => {
   flush().catch(() => {});
 }, 2000);
 
+function isAllowedItemUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return host === 'x.com' || host.endsWith('.x.com') || host === 'twitter.com' || host.endsWith('.twitter.com');
+  } catch {
+    return false;
+  }
+}
+
+async function resolvePanelTabId(sender) {
+  if (sender?.tab?.id != null) return sender.tab.id;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.id ?? null;
+}
+
+async function openTopPicksPopupWindow() {
+  const url = chrome.runtime.getURL('sidepanel.html');
+  const win = await chrome.windows.create({
+    url,
+    type: 'popup',
+    width: 420,
+    height: 640,
+    focused: true,
+  });
+  if (win?.id != null) {
+    try {
+      await chrome.windows.update(win.id, { focused: true });
+    } catch {
+      /* focus is best-effort */
+    }
+  }
+  return { ok: true, opened: true, surface: 'popup_window' };
+}
+
+async function openSidePanelSurface(sender, { path = 'sidepanel.html' } = {}) {
+  const tabId = await resolvePanelTabId(sender);
+  const sidePanel = chrome.sidePanel;
+  if (sidePanel?.setOptions && tabId != null) {
+    try {
+      await sidePanel.setOptions({ tabId, path, enabled: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+  if (sidePanel?.open && tabId != null) {
+    try {
+      await sidePanel.open({ tabId });
+      return { ok: true, opened: true, surface: 'side_panel', path };
+    } catch {
+      /* fall through */
+    }
+  }
+  try {
+    const url = chrome.runtime.getURL(path);
+    const win = await chrome.windows.create({
+      url,
+      type: 'popup',
+      width: 420,
+      height: 640,
+      focused: true,
+    });
+    if (win?.id != null) {
+      try {
+        await chrome.windows.update(win.id, { focused: true });
+      } catch {
+        /* focus is best-effort */
+      }
+    }
+    return { ok: true, opened: true, surface: 'popup_window', path };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function openM3SidePanel(sender) {
+  return openSidePanelSurface(sender, { path: 'sidepanel.html' });
+}
+
+async function openProfileSidePanel(sender) {
+  await chrome.storage.local.set({ sidepanelInitialTab: 'profile' });
+  return openSidePanelSurface(sender, { path: 'sidepanel.html' });
+}
+
+
+
+async function openItemUrl(url) {
+  if (!isAllowedItemUrl(url)) {
+    return { ok: false, error: 'invalid or disallowed URL' };
+  }
+  try {
+    await chrome.tabs.create({ url });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+(function configureSidePanelOnStartup() {
+  const sidePanel = chrome.sidePanel;
+  if (!sidePanel) return;
+  if (typeof sidePanel.setPanelBehavior === 'function') {
+    sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+  }
+  if (typeof sidePanel.setOptions === 'function') {
+    sidePanel.setOptions({ path: 'sidepanel.html', enabled: true }).catch(() => {});
+  }
+})();
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     const state = await getState();
@@ -310,6 +515,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         );
         sendResponse(await res.json());
       }
+    } else if (msg?.type === 'OPEN_M3_PANEL') {
+      sendResponse(await openM3SidePanel(sender));
+    } else if (msg?.type === 'OPEN_ITEM_URL') {
+      sendResponse(await openItemUrl(msg.url));
+    } else if (msg?.type === 'GET_PROFILE') {
+      sendResponse(await fetchUserProfile());
+    } else if (msg?.type === 'SAVE_PROFILE') {
+      const data = await saveUserProfile(msg.fields || msg.profile || {});
+      sendResponse({ ok: true, ...data });
+    } else if (msg?.type === 'RESET_PROFILE') {
+      const data = await resetUserProfile();
+      sendResponse({ ok: true, ...data });
+    } else if (msg?.type === 'PROFILE_PROMPT_PREVIEW') {
+      const data = await fetchProfilePromptPreview(msg.fields || msg.profile || {});
+      sendResponse({ ok: true, ...data });
+    } else if (msg?.type === 'OPEN_PROFILE_PANEL') {
+      sendResponse(await openProfileSidePanel(sender));
     } else {
       sendResponse({ ok: false, error: 'unknown message' });
     }

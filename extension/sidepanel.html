@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lens M0 · Top Picks &amp; Profile</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --accent: #0369a1;
+      --bad: #b91c1c;
+      --ok: #047857;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --card: #1e293b;
+        --text: #f1f5f9;
+        --muted: #94a3b8;
+        --line: #334155;
+        --accent: #38bdf8;
+        --bad: #f87171;
+        --ok: #34d399;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      min-height: 100vh;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--card);
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px 0;
+    }
+    h1 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .tab {
+      font: inherit;
+      cursor: pointer;
+      padding: 8px 12px;
+      border: none;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      margin-bottom: -1px;
+    }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      font-weight: 600;
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+    .pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .pill.ok { color: var(--ok); border-color: var(--ok); }
+    .pill.bad { color: var(--bad); border-color: var(--bad); }
+    #status-line { font-size: 13px; font-weight: 500; color: var(--text); margin-top: 6px; }
+    .status-details { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .status-details summary { cursor: pointer; user-select: none; }
+    #progress-line { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .toolbar { margin-top: 8px; padding-bottom: 10px; }
+    button {
+      font: inherit;
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--text);
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    main { padding: 10px 12px 16px; }
+    #banner {
+      display: none;
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #fef3c7;
+      color: #92400e;
+      font-size: 12px;
+    }
+    @media (prefers-color-scheme: dark) {
+      #banner { background: #422006; color: #fde68a; }
+    }
+    #list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: calc(100vh - 200px);
+      overflow-y: auto;
+    }
+    .item {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .item-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+      margin-bottom: 6px;
+    }
+    .rank { font-weight: 700; font-size: 14px; color: var(--accent); }
+    .meta { font-size: 11px; color: var(--muted); }
+    .snippet {
+      font-size: 12px;
+      margin: 6px 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .reason { font-size: 11px; color: var(--muted); font-style: italic; }
+    .item-actions { margin-top: 8px; }
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 24px 12px;
+      font-size: 12px;
+    }
+    .profile-form { display: flex; flex-direction: column; gap: 10px; }
+    .profile-field label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .profile-field .hint {
+      font-weight: 400;
+      font-size: 10px;
+      display: block;
+      margin-top: 2px;
+    }
+    .profile-field textarea {
+      width: 100%;
+      min-height: 56px;
+      font: inherit;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--text);
+      resize: vertical;
+    }
+    .profile-field textarea.tall { min-height: 88px; }
+    .profile-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    #profile-meta { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+    #profile-preview {
+      display: none;
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      font-size: 11px;
+    }
+    #profile-preview.visible { display: block; }
+    #profile-preview h3 { margin: 0 0 8px; font-size: 12px; }
+    #profile-preview pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 220px;
+      overflow: auto;
+      margin: 0;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    #profile-preview .preview-hash { margin-top: 8px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Lens M0</h1>
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="top" role="tab" aria-selected="true">Top Picks</button>
+      <button type="button" class="tab" data-tab="profile" role="tab" aria-selected="false">Profile</button>
+    </nav>
+    <div id="panel-top" class="tab-panel active">
+      <div class="row" style="margin-top:8px">
+        <span id="core-pill" class="pill">core…</span>
+        <span id="mode-pill" class="pill">mode…</span>
+      </div>
+      <div id="status-line">Loading status…</div>
+      <details id="status-details" class="status-details">
+        <summary>Feed details</summary>
+        <div id="progress-line"></div>
+      </details>
+      <div class="toolbar">
+        <button type="button" id="refresh" class="primary">Refresh scoring</button>
+      </div>
+    </div>
+    <div id="panel-profile" class="tab-panel">
+      <p id="profile-meta" class="meta">Loading profile…</p>
+    </div>
+  </header>
+  <main>
+    <div id="banner"></div>
+    <div id="view-top" class="tab-panel active">
+      <div id="list" class="empty">Loading top items…</div>
+    </div>
+    <div id="view-profile" class="tab-panel">
+      <form id="profile-form" class="profile-form">
+        <div class="profile-field">
+          <label for="state_preamble">Right now <span class="hint">Short session context for M3</span></label>
+          <textarea id="state_preamble" name="state_preamble" rows="2"></textarea>
+        </div>
+        <div class="profile-field">
+          <label for="identity_revealed">Who I am <span class="hint">Stable self / taste you already show</span></label>
+          <textarea id="identity_revealed" name="identity_revealed" class="tall" rows="3"></textarea>
+        </div>
+        <div class="profile-field">
+          <label for="identity_endorsed">Who I’m becoming <span class="hint">Aspirational direction</span></label>
+          <textarea id="identity_endorsed" name="identity_endorsed" class="tall" rows="3"></textarea>
+        </div>
+        <div class="profile-field">
+          <label for="positive_profile">More of <span class="hint">Topics and examples to boost</span></label>
+          <textarea id="positive_profile" name="positive_profile" class="tall" rows="4"></textarea>
+        </div>
+        <div class="profile-field">
+          <label for="negative_profile">Less of / suppress <span class="hint">LOW-FIT items for ambient M3</span></label>
+          <textarea id="negative_profile" name="negative_profile" class="tall" rows="3"></textarea>
+        </div>
+        <div class="profile-actions">
+          <button type="button" id="profile-save" class="primary">Save</button>
+          <button type="button" id="profile-reset">Reset</button>
+          <button type="button" id="profile-preview-btn">Preview what M3 sees</button>
+        </div>
+      </form>
+      <div id="profile-preview" aria-live="polite">
+        <h3>M3 prompt preview</h3>
+        <div id="profile-preview-fields"></div>
+        <pre id="profile-preview-text"></pre>
+        <div id="profile-preview-hash" class="preview-hash"></div>
+      </div>
+    </div>
+  </main>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

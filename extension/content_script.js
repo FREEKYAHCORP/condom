@@ -6,7 +6,9 @@
   let rankById = new Map();
   let itemMetaById = new Map();
   let ambientFeedStatus = null;
-  let topShelfItems = [];
+  let chipOpenPending = false;
+  let chipFeedback = null;
+  let chipFeedbackTimer = null;
 
   const send = (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
 
@@ -16,7 +18,9 @@
     rankById = new Map();
     itemMetaById = new Map();
     ambientFeedStatus = null;
-    topShelfItems = [];
+    chipOpenPending = false;
+    chipFeedback = null;
+    clearChipFeedbackTimer();
     for (const article of document.querySelectorAll('article')) {
       const badge = article.querySelector(':scope > .lens-m0-badge');
       if (badge) badge.remove();
@@ -27,9 +31,16 @@
       if (cell) cell.style.order = '';
     }
     const statusEl = document.getElementById('lens-m0-status');
-    if (statusEl) statusEl.textContent = 'Lens M0';
-    const shelf = document.getElementById('lens-m0-top-shelf');
-    if (shelf) shelf.remove();
+    if (statusEl) {
+      statusEl.textContent = 'Lens · native';
+      statusEl.style.pointerEvents = 'none';
+      statusEl.style.cursor = 'default';
+      statusEl.removeAttribute('role');
+      statusEl.removeAttribute('title');
+      statusEl.removeAttribute('aria-label');
+      statusEl.removeAttribute('tabindex');
+      statusEl.onclick = null;
+    }
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
@@ -123,31 +134,88 @@
       [data-lens-m0-top="1"] { outline:2px solid rgba(14,165,233,.65) !important; outline-offset:-2px; }
       [data-lens-m0-low="1"] { opacity:.45 !important; }
       [data-lens-m0-pending="1"]:not([data-lens-m0-low="1"]) { opacity:.78 !important; }
-      #lens-m0-status { position:fixed; z-index:999999; bottom:12px; right:12px; background:#111827; color:white; padding:6px 9px; border-radius:8px; font:12px system-ui; pointer-events:none; opacity:.82; max-width:min(92vw, 420px); }
-      #lens-m0-top-shelf { position:fixed; z-index:999998; top:12px; left:12px; width:min(280px, 42vw); max-height:min(50vh, 360px); overflow:auto; background:rgba(17,24,39,.92); color:#f9fafb; border-radius:10px; padding:8px 10px; font:11px/1.35 system-ui; pointer-events:none; opacity:.88; box-shadow:0 4px 14px rgba(0,0,0,.25); }
-      #lens-m0-top-shelf .lens-m0-shelf-title { font-weight:600; font-size:11px; margin-bottom:6px; color:#e5e7eb; }
-      #lens-m0-top-shelf .lens-m0-shelf-row { padding:5px 0; border-top:1px solid rgba(255,255,255,.08); }
-      #lens-m0-top-shelf .lens-m0-shelf-row:first-of-type { border-top:none; }
-      #lens-m0-top-shelf .lens-m0-shelf-meta { color:#9ca3af; font-size:10px; }
-      #lens-m0-top-shelf .lens-m0-shelf-snippet { color:#d1d5db; margin-top:2px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+      #lens-m0-status { position:fixed; z-index:999999; bottom:12px; right:12px; background:#111827; color:white; padding:6px 9px; border-radius:8px; font:12px system-ui; opacity:.82; max-width:min(72vw, 280px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      #lens-m0-status:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; opacity: 1; }
     `;
     document.documentElement.appendChild(style);
   }
 
-  function formatAmbientStatus() {
-    if (mode === 'm3') {
-      const s = ambientFeedStatus;
-      if (!s) return 'Lens M0 · m3 · waiting for core';
-      const phase = s.phase ?? s.epoch_status ?? '—';
-      const topK = s.top_k ?? 10;
-      const topReady = s.top_ready ? 'top ready' : 'top loading';
-      const active = s.candidate_count ?? '—';
-      const scored = s.scored_count ?? '—';
-      const pending = s.unscored_count ?? '—';
-      const m3 = s.m3_status ?? 'idle';
-      return `Lens M0 · m3 · ${phase} · ${topReady} (${topK}) · ${scored}/${active} scored · ${pending} pending · ${m3}`;
+  function clearChipFeedbackTimer() {
+    if (chipFeedbackTimer != null) {
+      clearTimeout(chipFeedbackTimer);
+      chipFeedbackTimer = null;
     }
-    return `Lens M0 · ${mode}`;
+  }
+
+  function scheduleChipFeedbackClear(ms = 3200) {
+    clearChipFeedbackTimer();
+    chipFeedbackTimer = setTimeout(() => {
+      chipFeedback = null;
+      chipFeedbackTimer = null;
+      showStatus();
+    }, ms);
+  }
+
+  function formatM3ChipProgressSuffix(s) {
+    if (!s) return '';
+    const parts = [];
+    const active = s.candidate_count;
+    const scored = s.scored_count;
+    const pending = s.unscored_count;
+    if (active != null && scored != null && Number.isFinite(Number(active)) && Number.isFinite(Number(scored))) {
+      parts.push(`${scored}/${active}`);
+    }
+    if (pending != null && Number.isFinite(Number(pending)) && Number(pending) > 0) {
+      parts.push(`${pending} pending`);
+    }
+    if (!parts.length) return '';
+    return ` · ${parts.join(' · ')}`;
+  }
+
+  function formatM3ChipLabel() {
+    if (chipFeedback) return chipFeedback;
+    const s = ambientFeedStatus;
+    const base = s?.top_ready ? 'M3 Top Picks ready · Open' : 'M3 Top Picks loading · Open';
+    if (!s) return 'M3 Top Picks loading · Open';
+    return base + formatM3ChipProgressSuffix(s);
+  }
+
+  function formatM3ChipAriaLabel() {
+    const action = 'Open M3 Top Picks';
+    if (chipFeedback) return `${action}. ${chipFeedback}`;
+    const s = ambientFeedStatus;
+    const status = s?.top_ready ? 'Top Picks ready' : 'Top Picks loading';
+    const suffix = formatM3ChipProgressSuffix(s);
+    return `${action}. ${status}${suffix ? `. ${suffix.replace(/^ · /, '')}` : ''}`;
+  }
+
+  async function openM3PanelFromChip() {
+    if (chipOpenPending) return;
+    chipOpenPending = true;
+    clearChipFeedbackTimer();
+    chipFeedback = 'Opening Top Picks…';
+    showStatus();
+    try {
+      const res = await send({ type: 'OPEN_M3_PANEL' });
+      if (res?.ok && res.opened) {
+        chipFeedback = res.surface === 'popup_window' ? 'Top Picks window opened' : 'Top Picks opened';
+        scheduleChipFeedbackClear();
+      } else {
+        chipFeedback = 'Could not open · use extension menu';
+        scheduleChipFeedbackClear();
+      }
+    } catch {
+      chipFeedback = 'Could not open · use extension menu';
+      scheduleChipFeedbackClear();
+    } finally {
+      chipOpenPending = false;
+      showStatus();
+    }
+  }
+
+  function formatAmbientStatus() {
+    if (mode === 'm3') return formatM3ChipLabel();
+    return `Lens · ${mode}`;
   }
 
   function showStatus() {
@@ -159,48 +227,37 @@
       document.documentElement.appendChild(el);
     }
     el.textContent = formatAmbientStatus();
+    if (mode === 'm3') {
+      el.style.pointerEvents = 'auto';
+      el.style.cursor = chipOpenPending ? 'wait' : 'pointer';
+      el.setAttribute('role', 'button');
+      el.tabIndex = 0;
+      el.setAttribute('aria-label', formatM3ChipAriaLabel());
+      el.title = formatM3ChipLabel();
+      if (!el.__lensM3ChipBound) {
+        el.__lensM3ChipBound = true;
+        el.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openM3PanelFromChip();
+        });
+        el.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          event.stopPropagation();
+          openM3PanelFromChip();
+        });
+      }
+    } else {
+      el.style.pointerEvents = 'none';
+      el.style.cursor = 'default';
+      el.removeAttribute('role');
+      el.removeAttribute('title');
+      el.removeAttribute('aria-label');
+      el.tabIndex = -1;
+    }
   }
 
-  function escapeHtml(text) {
-    return String(text)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-  function showTopShelf() {
-    injectStyles();
-    let shelf = document.getElementById('lens-m0-top-shelf');
-    if (mode !== 'm3') {
-      if (shelf) shelf.remove();
-      return;
-    }
-    const topK = ambientFeedStatus?.top_k ?? 10;
-    const phase = ambientFeedStatus?.phase ?? ambientFeedStatus?.epoch_status ?? '';
-    if (!topShelfItems.length && !ambientFeedStatus) {
-      if (shelf) shelf.remove();
-      return;
-    }
-    if (!shelf) {
-      shelf = document.createElement('div');
-      shelf.id = 'lens-m0-top-shelf';
-      document.documentElement.appendChild(shelf);
-    }
-    const title = `M3 top ${topK}${phase ? ` · ${phase}` : ''}`;
-    const rowsHtml = topShelfItems.map((row) => {
-      const seen = seenItems.get(row.item_id);
-      const author = row.author_handle || seen?.author_handle || '?';
-      const rawScore = row.m3_score ?? row.score;
-      const scored = rawScore != null && !Number.isNaN(Number(rawScore));
-      const scoreTxt = scored ? Math.round(Number(rawScore)) : 'pending';
-      const tier = row.tier ? ` · ${escapeHtml(String(row.tier))}` : '';
-      const snippet = ((row.text || seen?.text || '') + '').trim().slice(0, 100);
-      const snip = snippet ? `<div class="lens-m0-shelf-snippet">${escapeHtml(snippet)}</div>` : '';
-      return `<div class="lens-m0-shelf-row"><div class="lens-m0-shelf-meta">#${row.rank} · @${escapeHtml(author)} · ${scoreTxt}${tier}</div>${snip}</div>`;
-    }).join('');
-    shelf.innerHTML = `<div class="lens-m0-shelf-title">${escapeHtml(title)}</div>${rowsHtml || '<div class="lens-m0-shelf-meta">loading top…</div>'}`;
-  }
 
   function cellFor(article) {
     return article.closest('[data-testid="cellInnerDiv"]') || article.parentElement;
@@ -275,7 +332,6 @@
         cell.style.order = '';
       }
     }
-    showTopShelf();
   }
 
   function scan() {
@@ -328,15 +384,11 @@
           },
         ]),
       );
-      const topK = ambientFeedStatus?.top_k ?? 10;
-      topShelfItems = items.slice(0, topK);
     } else if (mode === 'cheap') {
-      topShelfItems = [];
       itemMetaById = new Map();
       const ranked = await send({ type: 'RANK', mode: 'cheap', refresh: force });
       rankById = new Map((ranked.items || []).map((row) => [row.item_id, row.rank]));
     } else {
-      topShelfItems = [];
       rankById = new Map();
       itemMetaById = new Map();
     }

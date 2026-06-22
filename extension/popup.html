@@ -3,34 +3,58 @@
 <head>
   <meta charset="utf-8">
   <style>
-    body { width: 300px; margin: 0; padding: 12px; font: 13px system-ui, sans-serif; color: #111827; }
+    body { width: 320px; max-height: 560px; margin: 0; padding: 12px; font: 13px system-ui, sans-serif; color: #111827; overflow-y: auto; }
     h1 { font-size: 16px; margin: 0 0 8px; }
     label { display: block; margin: 6px 0; }
-    button { margin: 6px 4px 0 0; padding: 6px 8px; }
+    button { margin: 6px 4px 0 0; padding: 6px 8px; cursor: pointer; }
     code { font-size: 11px; word-break: break-all; }
     .muted { color: #6b7280; }
     .ok { color: #047857; }
     .bad { color: #b91c1c; }
-    pre { white-space: pre-wrap; }
+    pre { white-space: pre-wrap; font-size: 10px; max-height: 72px; overflow: auto; margin: 8px 0 0; }
     .hint { margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 6px; font-size: 12px; }
+    #m3-section { display: none; margin-top: 10px; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+    #m3-section h2 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+    #m3-status-line { font-size: 12px; margin-bottom: 8px; line-height: 1.35; }
+    #open-top-picks.primary-cta { font-weight: 600; padding: 8px 12px; margin-bottom: 6px; }
+    #m3-panel-hint { font-size: 11px; margin: 4px 0 8px; }
+    .fallback-details { margin-top: 4px; border: 1px dashed #d1d5db; border-radius: 8px; padding: 0 8px 8px; background: #fafafa; }
+    .fallback-details summary { cursor: pointer; font-size: 11px; color: #6b7280; padding: 8px 0 4px; list-style-position: inside; }
+    #m3-top-list { max-height: 180px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 6px; background: #f9fafb; }
   </style>
 </head>
 <body>
   <h1>Lens M0</h1>
   <div id="health" class="muted">checking core…</div>
-  <div id="offline-hint" class="hint" style="display:none">Start local core first:<br><code>python scripts\\serve_core.py</code></div>
+  <button type="button" id="edit-profile-global" style="margin:0 0 8px">Edit profile</button>
+  <div id="offline-hint" class="hint" style="display:none">Start local core first:<br><code>python scripts\serve_core.py</code></div>
   <div class="muted">session</div>
   <code id="session"></code>
-  <div id="m3-ambient" class="muted" style="display:none;margin-top:6px;font-size:12px;"></div>
   <hr>
   <label><input type="radio" name="mode" value="native"> Native X</label>
   <label><input type="radio" name="mode" value="cheap"> Cheap reranker</label>
   <label><input type="radio" name="mode" value="m3"> MiniMax M3</label>
   <label><input type="checkbox" id="reorder"> experimental DOM reorder</label>
   <button id="new-session">New session</button>
-  <button id="refresh-rank">Refresh rank</button>
+  <button id="refresh-rank">Refresh scoring</button>
   <button id="flush">Flush</button>
-  <pre id="status" class="muted"></pre>
+  <div id="m3-section">
+    <h2>Top Picks (M3)</h2>
+    <div id="m3-status-line" class="muted"></div>
+    <button type="button" id="edit-profile" style="margin-bottom:6px">Edit profile</button>
+    <button type="button" id="open-top-picks" class="primary-cta">Open Top Picks</button>
+    <div id="m3-panel-hint" class="muted" style="display:none"></div>
+    <details id="m3-fallback-preview" class="fallback-details">
+      <summary>Fallback preview (inline list only)</summary>
+      <div id="m3-top-list">
+        <div id="m3-list-state" class="muted">Open this section to load an inline list.</div>
+      </div>
+    </details>
+  </div>
+  <details id="debug-details" style="margin-top:8px">
+    <summary class="muted" style="cursor:pointer;font-size:11px">Debug</summary>
+    <pre id="status" class="muted"></pre>
+  </details>
   <script src="popup.js"></script>
 </body>
 </html>
