@@ -236,7 +236,7 @@ def _normalize_ambient_m3_score_entries(items: list, allowed: set[str]) -> list[
         item_id = entry.get("item_id")
         if not isinstance(item_id, str) or not item_id.strip():
             raise ValueError(f"items[{idx}].item_id must be a non-empty string")
-        item_id = item_id.strip()
+        item_id = item_id.strip().removeprefix("<").removesuffix(">").removeprefix("⟦").removesuffix("⟧").strip()
         if item_id not in allowed:
             repaired = _repair_near_id(item_id)
             if repaired is None:

@@ -46,3 +46,16 @@ def test_parse_ambient_m3_repairs_near_numeric_id_typo():
         {"2068829766900412920", "2069002271216787464"},
     )
     assert rows[0]["item_id"] == "2068829766900412920"
+
+
+def test_parse_ambient_m3_strips_wrapped_item_ids():
+    rows = parse_ambient_m3_items_json(
+        """
+        {"items": [
+          {"item_id": "<2069030608727408993>", "score": 62, "tier": "mid", "serve": true, "reason": "fits"},
+          {"item_id": "⟦2068874872403660944⟧", "score": 58, "tier": "mid", "serve": true, "reason": "fits"}
+        ]}
+        """,
+        {"2069030608727408993", "2068874872403660944"},
+    )
+    assert [row["item_id"] for row in rows] == ["2069030608727408993", "2068874872403660944"]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from condom_core.ambient_m3 import (
@@ -95,7 +95,7 @@ def feed_m3_current(
 
 
 @app.post("/feed/m3/request")
-def feed_m3_request(payload: FeedM3RequestIn, background_tasks: BackgroundTasks):
+def feed_m3_request(payload: FeedM3RequestIn):
     conn = _conn()
     try:
         status = load_feed_status(conn, payload.session_id)
@@ -109,8 +109,7 @@ def feed_m3_request(payload: FeedM3RequestIn, background_tasks: BackgroundTasks)
             "reason": "no_unscored_candidates",
             "status": status,
         }
-    background_tasks.add_task(
-        schedule_m3_scoring_background,
+    schedule_m3_scoring_background(
         db_path=str(DB_PATH),
         session_id=payload.session_id,
         batch_size=payload.batch_size,
