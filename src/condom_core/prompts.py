@@ -18,6 +18,7 @@ BANNED_ENCOUNTER_WORDS = {
 }
 
 FEED_SELECTION_PROMPT_VERSION = "usersim_feed_selection_v0"
+AMBIENT_M3_ITEM_SCORE_PROMPT_VERSION = "ambient_m3_item_score_v0"
 
 
 def validate_encounter_prompt(text: str) -> None:
@@ -71,5 +72,19 @@ def build_feed_selection_prompt(
         .replace("{{IDENTITY_REVEALED}}", identity_revealed.strip() or "(not specified)")
         .replace("{{IDENTITY_ENDORSED}}", identity_endorsed.strip() or "(not specified)")
         .replace("{{CURATION_TARGET}}", curation_target)
+    )
+
+def build_ambient_m3_item_score_prompt(
+    candidate_items: str,
+    identity_revealed: str = "",
+    identity_endorsed: str = "",
+    state_preamble: str = "ordinary scroll session. a few minutes to look around.",
+) -> str:
+    template = (PROMPTS / "ambient_m3_item_score_v0.txt").read_text(encoding="utf-8")
+    return (
+        template.replace("{{CANDIDATE_ITEMS}}", candidate_items)
+        .replace("{{STATE_PREAMBLE}}", state_preamble)
+        .replace("{{IDENTITY_REVEALED}}", identity_revealed.strip() or "(not specified)")
+        .replace("{{IDENTITY_ENDORSED}}", identity_endorsed.strip() or "(not specified)")
     )
 

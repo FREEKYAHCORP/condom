@@ -212,6 +212,46 @@ CREATE TABLE IF NOT EXISTS feed_evaluations (
   created_at         TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ambient_m3_item_scores (
+  session_id       TEXT NOT NULL,
+  item_id          TEXT NOT NULL,
+  score            REAL NOT NULL,
+  tier             TEXT NOT NULL,
+  serve            INTEGER NOT NULL,
+  reason           TEXT NOT NULL,
+  model_call_id    TEXT,
+  scored_at        TEXT NOT NULL,
+  PRIMARY KEY (session_id, item_id),
+  FOREIGN KEY (item_id) REFERENCES items(item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ambient_m3_scores_session ON ambient_m3_item_scores(session_id);
+
+CREATE TABLE IF NOT EXISTS feed_snapshots (
+  snapshot_id      TEXT PRIMARY KEY,
+  session_id       TEXT NOT NULL,
+  kind             TEXT NOT NULL,
+  candidate_count  INTEGER NOT NULL,
+  meta_json        TEXT NOT NULL,
+  created_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feed_snapshot_items (
+  snapshot_id      TEXT NOT NULL,
+  item_id          TEXT NOT NULL,
+  snapshot_rank    INTEGER NOT NULL,
+  window_rank      INTEGER NOT NULL,
+  m3_score         REAL,
+  tier             TEXT,
+  serve            INTEGER,
+  reason           TEXT,
+  PRIMARY KEY (snapshot_id, item_id),
+  UNIQUE (snapshot_id, snapshot_rank),
+  FOREIGN KEY (snapshot_id) REFERENCES feed_snapshots(snapshot_id),
+  FOREIGN KEY (item_id) REFERENCES items(item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_feed_snapshots_session_created ON feed_snapshots(session_id, created_at);
 """
 
 

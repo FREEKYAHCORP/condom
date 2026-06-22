@@ -4,8 +4,32 @@
   let mode = 'native';
   let experimentalReorder = false;
   let rankById = new Map();
+  let itemMetaById = new Map();
+  let ambientFeedStatus = null;
 
   const send = (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
+
+  function resetSessionState() {
+    seenItems.clear();
+    visible.clear();
+    rankById = new Map();
+    itemMetaById = new Map();
+    ambientFeedStatus = null;
+    for (const article of document.querySelectorAll('article')) {
+      const badge = article.querySelector(':scope > .lens-m0-badge');
+      if (badge) badge.remove();
+      article.removeAttribute('data-lens-m0-top');
+      article.removeAttribute('data-lens-m0-low');
+      const cell = cellFor(article);
+      if (cell) cell.style.order = '';
+    }
+    const statusEl = document.getElementById('lens-m0-status');
+    if (statusEl) statusEl.textContent = 'Lens M0';
+  }
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === 'SESSION_RESET') resetSessionState();
+  });
 
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
@@ -97,6 +121,19 @@
     document.documentElement.appendChild(style);
   }
 
+  function formatAmbientStatus() {
+    if (mode === 'm3') {
+      const s = ambientFeedStatus;
+      if (!s) return 'Lens M0 · m3 · waiting for core';
+      const captured = s.candidate_count ?? s.captured ?? '—';
+      const scored = s.scored_count ?? s.scored ?? '—';
+      const pending = s.unscored_count ?? s.pending ?? (Number.isFinite(captured) && Number.isFinite(scored) ? Math.max(0, captured - scored) : '—');
+      const status = s.m3_status ?? s.status ?? 'idle';
+      return `Lens M0 · m3 · ${scored}/${captured} scored · ${pending} pending · ${status}`;
+    }
+    return `Lens M0 · ${mode}`;
+  }
+
   function showStatus() {
     injectStyles();
     let el = document.getElementById('lens-m0-status');
@@ -105,7 +142,7 @@
       el.id = 'lens-m0-status';
       document.documentElement.appendChild(el);
     }
-    el.textContent = `Lens M0 · ${mode}`;
+    el.textContent = formatAmbientStatus();
   }
 
   function cellFor(article) {
@@ -128,15 +165,35 @@
         continue;
       }
       const rank = rankById.get(item.item_id);
-      if (!rank) continue;
+      const meta = itemMetaById.get(item.item_id) || {};
+      if (!rank) {
+        if (badge) badge.remove();
+        article.removeAttribute('data-lens-m0-top');
+        article.removeAttribute('data-lens-m0-low');
+        if (cell && !experimentalReorder) cell.style.order = '';
+        continue;
+      }
       if (!badge) {
         badge = document.createElement('div');
         badge.className = 'lens-m0-badge';
         article.appendChild(badge);
       }
-      badge.textContent = `${mode} #${rank}`;
-      article.setAttribute('data-lens-m0-top', rank <= 12 ? '1' : '0');
-      article.setAttribute('data-lens-m0-low', rank > 40 ? '1' : '0');
+      if (mode === 'm3') {
+        const score = meta.score != null ? Math.round(Number(meta.score)) : null;
+        const tier = meta.tier ? String(meta.tier) : '';
+        badge.textContent = score != null && !Number.isNaN(score)
+          ? `m3 #${rank}${tier ? ` · ${tier}` : ''} (${score})`
+          : `m3 #${rank}${tier ? ` · ${tier}` : ''}`;
+        const serve = meta.serve;
+        const top = tier === 'gold' || rank <= 12;
+        const low = serve === false || rank > 40;
+        article.setAttribute('data-lens-m0-top', top && serve !== false ? '1' : '0');
+        article.setAttribute('data-lens-m0-low', low ? '1' : '0');
+      } else {
+        badge.textContent = `${mode} #${rank}`;
+        article.setAttribute('data-lens-m0-top', rank <= 12 ? '1' : '0');
+        article.setAttribute('data-lens-m0-low', rank > 40 ? '1' : '0');
+      }
       if (experimentalReorder && cell) {
         const parent = cell.parentElement;
         if (parent) {
@@ -144,6 +201,8 @@
           parent.style.flexDirection = 'column';
           cell.style.order = String(rank);
         }
+      } else if (cell) {
+        cell.style.order = '';
       }
     }
   }
@@ -171,12 +230,31 @@
     if (res && res.state) {
       mode = res.state.mode || 'native';
       experimentalReorder = !!res.state.experimentalReorder;
+      ambientFeedStatus = res.state.feedStatus ?? ambientFeedStatus;
     }
-    if (mode !== 'native') {
-      const ranked = await send({ type: 'RANK', mode, refresh: force });
+    if (mode === 'm3') {
+      try {
+        const st = await send({ type: 'FEED_STATUS' });
+        if (st?.ok !== false) ambientFeedStatus = st;
+      } catch {
+        /* keep last feedStatus */
+      }
+      const ranked = await send({ type: 'RANK', mode: 'm3', refresh: force });
+      const items = ranked.items || [];
+      rankById = new Map(items.map((row) => [row.item_id, row.rank]));
+      itemMetaById = new Map(
+        items.map((row) => [
+          row.item_id,
+          { score: row.score, tier: row.tier, serve: row.serve, reason: row.reason },
+        ]),
+      );
+    } else if (mode === 'cheap') {
+      itemMetaById = new Map();
+      const ranked = await send({ type: 'RANK', mode: 'cheap', refresh: force });
       rankById = new Map((ranked.items || []).map((row) => [row.item_id, row.rank]));
     } else {
       rankById = new Map();
+      itemMetaById = new Map();
     }
     applyRanks();
   }

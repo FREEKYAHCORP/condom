@@ -212,3 +212,80 @@ def parse_feed_selection_json(
         "dropped_item_ids": normalized_dropped,
         "short_verdict": (short_verdict or "").strip(),
     }
+
+def _normalize_ambient_m3_score_entries(items: list, allowed: set[str]) -> list[dict]:
+    if not isinstance(items, list) or not items:
+        raise ValueError("items must be a non-empty array")
+    seen: set[str] = set()
+    normalized: list[dict] = []
+    for idx, entry in enumerate(items):
+        if not isinstance(entry, dict):
+            raise ValueError(f"items[{idx}] must be an object")
+        item_id = entry.get("item_id")
+        if not isinstance(item_id, str) or not item_id.strip():
+            raise ValueError(f"items[{idx}].item_id must be a non-empty string")
+        item_id = item_id.strip()
+        if item_id not in allowed:
+            raise ValueError(f"items[{idx}].item_id {item_id!r} not in candidate set")
+        if item_id in seen:
+            raise ValueError(f"duplicate item_id {item_id!r}")
+        seen.add(item_id)
+        try:
+            score = float(entry.get("score"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"items[{idx}].score must be numeric 0-100") from exc
+        if score < 0 or score > 100:
+            raise ValueError(f"items[{idx}].score must be between 0 and 100")
+        tier = entry.get("tier")
+        if not isinstance(tier, str) or not tier.strip():
+            raise ValueError(f"items[{idx}].tier must be a non-empty string")
+        tier = tier.strip()
+        try:
+            serve = _normalize_bool(entry.get("serve"))
+        except ValueError as exc:
+            raise ValueError(f"items[{idx}].serve must be boolean") from exc
+        reason = entry.get("reason")
+        if not isinstance(reason, str):
+            raise ValueError(f"items[{idx}].reason must be a string")
+        reason = reason.strip()
+        if not reason:
+            raise ValueError(f"items[{idx}].reason must be non-empty")
+        normalized.append(
+            {
+                "item_id": item_id,
+                "score": score,
+                "tier": tier,
+                "serve": serve,
+                "reason": reason,
+            }
+        )
+    if seen != allowed:
+        missing = sorted(allowed - seen)
+        raise ValueError(f"items missing candidate ids: {', '.join(missing[:8])}")
+    return normalized
+
+
+def parse_ambient_m3_items_json(text: str, candidate_ids: list[str] | set[str]) -> list[dict]:
+    """Strict JSON: top-level array of scores, or object with items array."""
+    import json as _json
+
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+    try:
+        payload = _json.loads(raw)
+    except _json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON: {exc}") from exc
+    allowed = {str(cid).strip() for cid in candidate_ids if str(cid).strip()}
+    if not allowed:
+        raise ValueError("candidate_ids must be non-empty")
+    if isinstance(payload, list):
+        return _normalize_ambient_m3_score_entries(payload, allowed)
+    if isinstance(payload, dict):
+        return _normalize_ambient_m3_score_entries(payload.get("items"), allowed)
+    raise ValueError("M3 item scores JSON must be an array or object with items")
+
+
+def parse_m3_item_scores_json(text: str, candidate_ids: list[str] | set[str]) -> list[dict]:
+    return parse_ambient_m3_items_json(text, candidate_ids)

@@ -13,7 +13,32 @@ async function load() {
   const radio = document.querySelector(`input[name="mode"][value="${state.mode || 'native'}"]`);
   if (radio) radio.checked = true;
   document.getElementById('reorder').checked = !!state.experimentalReorder;
-  document.getElementById('status').textContent = JSON.stringify({ queues: state.queues, minimax: state.health?.minimax_key_present }, null, 2);
+  const mode = state.mode || 'native';
+  const m3El = document.getElementById('m3-ambient');
+  if (m3El) {
+    if (mode === 'm3') {
+      m3El.style.display = 'block';
+      const s = state.feedStatus;
+      if (!s) {
+        m3El.textContent = online ? 'M3 ambient: no status yet (scoring may be pending)' : 'M3 ambient: core offline';
+      } else {
+        const captured = s.candidate_count ?? '—';
+        const scored = s.scored_count ?? '—';
+        const pending = s.unscored_count ?? '—';
+        const status = s.m3_status ?? s.status ?? 'idle';
+        const queue = s.m3_queue_depth != null ? ` · queue ${s.m3_queue_depth}` : '';
+        m3El.textContent = `M3: ${scored}/${captured} scored · ${pending} pending · ${status}${queue}`;
+      }
+    } else {
+      m3El.style.display = 'none';
+      m3El.textContent = '';
+    }
+  }
+  document.getElementById('status').textContent = JSON.stringify(
+    { queues: state.queues, minimax: state.health?.minimax_key_present, feedStatus: state.feedStatus || null },
+    null,
+    2,
+  );
 }
 
 document.querySelectorAll('input[name="mode"]').forEach((el) => {
@@ -35,8 +60,25 @@ document.getElementById('new-session').addEventListener('click', async () => {
 
 document.getElementById('refresh-rank').addEventListener('click', async () => {
   const mode = document.querySelector('input[name="mode"]:checked').value;
-  const res = await send({ type: 'RANK', mode, refresh: true });
-  document.getElementById('status').textContent = JSON.stringify({ arm: res.arm, effective: res.effective_arm, n: res.items?.length, model_calls: res.model_calls }, null, 2);
+  if (mode === 'm3') {
+    const res = await send({ type: 'REQUEST_M3_FEED' });
+    await load();
+    const statusPre = document.getElementById('status');
+    const detail = { m3_request: res };
+    try {
+      Object.assign(detail, JSON.parse(statusPre.textContent || '{}'));
+    } catch {
+      detail.previous = statusPre.textContent;
+    }
+    statusPre.textContent = JSON.stringify(detail, null, 2);
+  } else {
+    const res = await send({ type: 'RANK', mode, refresh: true });
+    document.getElementById('status').textContent = JSON.stringify(
+      { arm: res.arm, effective: res.effective_arm, n: res.items?.length, model_calls: res.model_calls },
+      null,
+      2,
+    );
+  }
 });
 
 document.getElementById('flush').addEventListener('click', async () => {

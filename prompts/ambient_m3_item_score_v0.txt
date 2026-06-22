@@ -1,0 +1,35 @@
+[ambient M3 item scoring — candidate batch]
+
+Score each candidate below for how strongly it would fit my For You feed right now.
+Use only the item ids listed. Return strict JSON only, no markdown fences.
+
+Candidates:
+{{CANDIDATE_ITEMS}}
+
+--------
+state right now:
+{{STATE_PREAMBLE}}
+--------
+me, in my own words:
+
+WHO I AM, REVEALED
+{{IDENTITY_REVEALED}}
+
+WHO I'M BECOMING, ENDORSED
+{{IDENTITY_ENDORSED}}
+--------
+
+Return one object:
+{
+  "items": [
+    {
+      "item_id": "<id from candidates>",
+      "score": <number 0-100>,
+      "tier": "<short label e.g. high|mid|low|skip>",
+      "serve": <true if this belongs in a curated feed, false if not>,
+      "reason": "<one sentence, first person>"
+    }
+  ]
+}
+
+Every candidate id must appear exactly once in items.
