@@ -20,10 +20,18 @@ AMBIENT_M3_MODEL = "MiniMax-M3"
 DEFAULT_IMMEDIATE_SNAPSHOT_KIND = "immediate"
 AMBIENT_M3_BATCH_ID = "candidate_window"
 
+DEFAULT_ACTIVE_WINDOW_MAX = 250
+DEFAULT_TOP_K = 10
+DEFAULT_BATCH_SIZE = 50
+DEFAULT_MAX_BATCHES = 5
+
+PhaseStatus = str  # warming|scoring_top|top_ready|scoring_rest|complete|unavailable
+
 ModelCall = Callable[[str], ModelCallResult]
 
 _BACKGROUND_LOCK = threading.Lock()
 _RUNNING_BACKGROUND_KEYS: set[str] = set()
+_RUNNING_BACKGROUND_SESSIONS: set[str] = set()
 
 
 def _utc_now() -> str:
@@ -36,6 +44,150 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
         (name,),
     ).fetchone()
     return row is not None
+
+def _background_session_key(db_path: str, session_id: str) -> str:
+    return f"{db_path}:{session_id}"
+
+
+def _is_background_running(db_path: str | None, session_id: str) -> bool:
+    with _BACKGROUND_LOCK:
+        if session_id in _RUNNING_BACKGROUND_SESSIONS:
+            return True
+    if not db_path:
+        return False
+    key = _background_session_key(db_path, session_id)
+    with _BACKGROUND_LOCK:
+        return key in _RUNNING_BACKGROUND_KEYS
+
+
+def count_total_seen_items(conn: sqlite3.Connection, session_id: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT item_id) AS n FROM x_returned_candidates WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    return int(row["n"] or 0)
+
+
+
+
+def load_active_window_rows(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
+    source: str | None = None,
+) -> list[dict[str, Any]]:
+    """Latest active_window_max candidates by first_captured_at desc, window_rank asc."""
+    joined = load_joined_candidate_rows(conn, session_id, source=source)
+    if not joined:
+        return []
+    ordered = sorted(
+        joined,
+        key=lambda r: (
+            -_capture_sort_key(str(r.get("first_captured_at") or "")),
+            int(r.get("window_rank") or 10**9),
+        ),
+    )
+    return ordered[: max(0, active_window_max)]
+
+
+def _capture_sort_key(captured_at: str) -> float:
+    if not captured_at:
+        return 0.0
+    try:
+        return datetime.fromisoformat(captured_at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+def _active_window_metrics(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
+    top_k: int = DEFAULT_TOP_K,
+) -> dict[str, Any]:
+    total_seen = count_total_seen_items(conn, session_id)
+    full_window = count_candidate_items(conn, session_id)
+    active_rows = load_active_window_rows(conn, session_id, active_window_max=active_window_max)
+    active_ids = {str(r["item_id"]) for r in active_rows}
+    active_count = len(active_rows)
+    scores = load_ambient_score_map(conn, session_id)
+    scored_in_active = sum(1 for iid in active_ids if iid in scores)
+    unscored_in_active = max(0, active_count - scored_in_active)
+    expired_count = max(0, full_window - active_count)
+    shelf_n = min(top_k, active_count) if active_count else 0
+    top_ready = shelf_n > 0 and scored_in_active >= shelf_n
+    return {
+        "total_seen_count": total_seen,
+        "full_window_count": full_window,
+        "active_count": active_count,
+        "expired_count": expired_count,
+        "scored_in_active": scored_in_active,
+        "unscored_in_active": unscored_in_active,
+        "top_ready": top_ready,
+        "shelf_n": shelf_n,
+        "active_rows": active_rows,
+        "scores": scores,
+    }
+
+
+def _derive_phase_status(
+    *,
+    base_availability: str,
+    active_count: int,
+    unscored_in_active: int,
+    top_ready: bool,
+    background_running: bool,
+) -> PhaseStatus:
+    if base_availability == "unavailable":
+        return "unavailable"
+    if active_count <= 0:
+        return "warming"
+    if unscored_in_active <= 0:
+        return "complete"
+    if not top_ready:
+        return "scoring_top"
+    if background_running:
+        return "scoring_rest"
+    return "top_ready"
+
+
+def _item_public_url(row: dict[str, Any]) -> str | None:
+    link = row.get("link_url")
+    if link:
+        return str(link)
+    handle = row.get("author_handle")
+    item_id = row.get("item_id")
+    if handle and item_id and str(item_id).isdigit():
+        h = str(handle).lstrip("@")
+        return f"https://x.com/{h}/status/{item_id}"
+    return None
+
+
+def _feed_item_from_row(
+    row: dict[str, Any],
+    *,
+    rank: int,
+    entry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    item_id = str(row["item_id"])
+    payload: dict[str, Any] = {
+        "item_id": item_id,
+        "rank": rank,
+        "snapshot_rank": rank,
+        "window_rank": int(row.get("window_rank") or 0),
+        "score": None if entry is None else entry["score"],
+        "m3_score": None if entry is None else entry["score"],
+        "tier": None if entry is None else entry["tier"],
+        "serve": None if entry is None else entry["serve"],
+        "reason": None if entry is None else entry["reason"],
+        "author_handle": row.get("author_handle"),
+        "text": row.get("text") or row.get("rendered_text"),
+        "url": _item_public_url(row),
+    }
+    return payload
+
+
 
 
 def count_candidate_items(conn: sqlite3.Connection, session_id: str) -> int:
@@ -55,40 +207,71 @@ def count_scored_items(conn: sqlite3.Connection, session_id: str) -> int:
     ).fetchone()
     return int(row["n"] or 0)
 
-
 def load_unscored_candidate_rows(
     conn: sqlite3.Connection,
     session_id: str,
     *,
     limit: int | None = None,
+    active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
 ) -> list[dict[str, Any]]:
-    """Joined candidate_window_items + items without an ambient_m3_item_scores row."""
-    if not _table_exists(conn, "ambient_m3_item_scores"):
-        joined = load_joined_candidate_rows(conn, session_id)
-        if limit is not None:
-            return joined[:limit]
-        return joined
-
-    sql = """
-        SELECT cwi.session_id, cwi.item_id, cwi.window_rank, cwi.first_response_id,
-               cwi.first_captured_at, cwi.source,
-               i.source AS item_source, i.batch_id, i.original_rank,
-               i.author_handle, i.author_name, i.author_bio, i.text, i.quoted_text,
-               i.thread_context, i.media_desc, i.link_url, i.link_title, i.link_excerpt,
-               i.engagement, i.rendered_text, i.raw_json, i.harvested_at
-        FROM candidate_window_items AS cwi
-        JOIN items AS i ON i.item_id = cwi.item_id
-        LEFT JOIN ambient_m3_item_scores AS s
-          ON s.session_id = cwi.session_id AND s.item_id = cwi.item_id
-        WHERE cwi.session_id = ? AND s.item_id IS NULL
-        ORDER BY cwi.window_rank ASC
-    """
-    params: list[Any] = [session_id]
+    """Unscored rows within the active candidate window only."""
+    active = load_active_window_rows(conn, session_id, active_window_max=active_window_max)
+    if not active:
+        return []
+    scores = load_ambient_score_map(conn, session_id)
+    unscored = [r for r in active if str(r["item_id"]) not in scores]
+    unscored.sort(key=lambda r: int(r.get("window_rank") or 10**9))
     if limit is not None:
-        sql += " LIMIT ?"
-        params.append(limit)
-    rows = conn.execute(sql, params).fetchall()
-    return [dict(row) for row in rows]
+        return unscored[:limit]
+    return unscored
+
+
+def load_feed_status(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    db_path: str | None = None,
+    active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
+    top_k: int = DEFAULT_TOP_K,
+) -> dict[str, Any]:
+    metrics = _active_window_metrics(
+        conn, session_id, active_window_max=active_window_max, top_k=top_k
+    )
+    base_status, m3_error = _m3_availability()
+    background_running = _is_background_running(db_path, session_id)
+    unscored_in_active = int(metrics["unscored_in_active"])
+    if background_running and base_status != "unavailable":
+        m3_status = "running"
+    elif unscored_in_active <= 0:
+        m3_status = "idle" if base_status != "unavailable" else "unavailable"
+    else:
+        m3_status = base_status
+    phase = _derive_phase_status(
+        base_availability=base_status,
+        active_count=int(metrics["active_count"]),
+        unscored_in_active=unscored_in_active,
+        top_ready=bool(metrics["top_ready"]),
+        background_running=background_running,
+    )
+    return {
+        "session_id": session_id,
+        "total_seen_count": int(metrics["total_seen_count"]),
+        "candidate_count": int(metrics["active_count"]),
+        "expired_count": int(metrics["expired_count"]),
+        "active_window_max": active_window_max,
+        "top_k": top_k,
+        "top_ready": bool(metrics["top_ready"]),
+        "phase": phase,
+        "epoch_status": phase,
+        "scored_count": int(metrics["scored_in_active"]),
+        "unscored_count": unscored_in_active,
+        "latest_graphql_at": _latest_graphql_at(conn, session_id),
+        "latest_m3_score_at": _latest_m3_score_at(conn, session_id),
+        "latest_feed_snapshot_at": _latest_feed_snapshot_at(conn, session_id),
+        "m3_queue_depth": unscored_in_active,
+        "m3_status": m3_status,
+        "m3_error": m3_error,
+    }
 
 
 def _latest_graphql_at(conn: sqlite3.Connection, session_id: str) -> str | None:
@@ -141,29 +324,6 @@ def _m3_availability() -> tuple[str, str | None]:
     if not get_key():
         return "unavailable", "missing MiniMax API key"
     return "ready", None
-
-
-def load_feed_status(conn: sqlite3.Connection, session_id: str) -> dict[str, Any]:
-    candidate_count = count_candidate_items(conn, session_id)
-    scored_count = count_scored_items(conn, session_id)
-    unscored_count = max(0, candidate_count - scored_count)
-    base_status, m3_error = _m3_availability()
-    if unscored_count <= 0:
-        m3_status = "idle" if base_status != "unavailable" else "unavailable"
-    else:
-        m3_status = base_status
-    return {
-        "session_id": session_id,
-        "candidate_count": candidate_count,
-        "scored_count": scored_count,
-        "unscored_count": unscored_count,
-        "latest_graphql_at": _latest_graphql_at(conn, session_id),
-        "latest_m3_score_at": _latest_m3_score_at(conn, session_id),
-        "latest_feed_snapshot_at": _latest_feed_snapshot_at(conn, session_id),
-        "m3_queue_depth": unscored_count,
-        "m3_status": m3_status,
-        "m3_error": m3_error,
-    }
 
 
 def render_ambient_candidate_batch_text(rows: list[dict[str, Any]]) -> str:
@@ -310,32 +470,21 @@ def build_immediate_feed_snapshot(
     limit: int | None = None,
     persist: bool = True,
     kind: str = DEFAULT_IMMEDIATE_SNAPSHOT_KIND,
+    active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
 ) -> dict[str, Any]:
-    """Order: M3 score desc, then native window_rank asc. Unscored items sort after scored."""
-    joined = load_joined_candidate_rows(conn, session_id)
-    scores = load_ambient_score_map(conn, session_id)
-    ordered = sorted(joined, key=lambda r: _sort_key_for_snapshot(r, scores))
+    """Active window only: scored first by M3 score desc, unscored after."""
+    metrics = _active_window_metrics(conn, session_id, active_window_max=active_window_max)
+    active_rows: list[dict[str, Any]] = metrics["active_rows"]  # type: ignore[assignment]
+    scores: dict[str, dict[str, Any]] = metrics["scores"]  # type: ignore[assignment]
+    ordered = sorted(active_rows, key=lambda r: _sort_key_for_snapshot(r, scores))
     if limit is not None:
         ordered = ordered[:limit]
-
+    active_count = len(active_rows)
     items: list[dict[str, Any]] = []
     for rank, row in enumerate(ordered, start=1):
         item_id = str(row["item_id"])
         entry = scores.get(item_id)
-        items.append(
-            {
-                "item_id": item_id,
-                "rank": rank,
-                "snapshot_rank": rank,
-                "window_rank": int(row.get("window_rank") or 0),
-                "score": None if entry is None else entry["score"],
-                "m3_score": None if entry is None else entry["score"],
-                "tier": None if entry is None else entry["tier"],
-                "serve": None if entry is None else entry["serve"],
-                "reason": None if entry is None else entry["reason"],
-            }
-        )
-
+        items.append(_feed_item_from_row(row, rank=rank, entry=entry))
     snapshot_id = f"{kind}:{session_id}:{datetime.now(timezone.utc).timestamp()}:{uuid.uuid4().hex}"
     payload: dict[str, Any] = {
         "session_id": session_id,
@@ -344,12 +493,21 @@ def build_immediate_feed_snapshot(
         "arm": AMBIENT_M3_ARM,
         "effective_arm": AMBIENT_M3_ARM,
         "created_at": _utc_now(),
-        "candidate_count": len(joined),
+        "candidate_count": active_count,
+        "active_window_max": active_window_max,
         "ordered_item_ids": [item["item_id"] for item in items],
         "items": items,
     }
     if persist:
-        persist_feed_snapshot(conn, snapshot_id, session_id, kind, len(joined), items)
+        persist_feed_snapshot(
+            conn,
+            snapshot_id,
+            session_id,
+            kind,
+            active_count,
+            items,
+            meta={"active_window_max": active_window_max},
+        )
         payload["persisted"] = True
     else:
         payload["persisted"] = False
@@ -413,23 +571,62 @@ def _load_latest_snapshot_header(conn: sqlite3.Connection, session_id: str) -> s
     ).fetchone()
 
 
+def _enrich_snapshot_feed_items(
+    conn: sqlite3.Connection,
+    session_id: str,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not items:
+        return items
+    ids = [str(it["item_id"]) for it in items]
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT cwi.item_id, cwi.window_rank,
+               i.author_handle, i.text, i.rendered_text, i.link_url
+        FROM candidate_window_items AS cwi
+        JOIN items AS i ON i.item_id = cwi.item_id
+        WHERE cwi.session_id = ? AND cwi.item_id IN ({placeholders})
+        """,
+        [session_id, *ids],
+    ).fetchall()
+    by_id = {str(r["item_id"]): dict(r) for r in rows}
+    out: list[dict[str, Any]] = []
+    for it in items:
+        merged = dict(it)
+        row = by_id.get(str(it["item_id"]))
+        if row:
+            merged["author_handle"] = row.get("author_handle")
+            merged["text"] = row.get("text") or row.get("rendered_text")
+            merged["url"] = _item_public_url(row)
+        out.append(merged)
+    return out
+
+
 def get_feed_current(
     conn: sqlite3.Connection,
     session_id: str,
     *,
     limit: int | None = None,
+    active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
 ) -> dict[str, Any]:
-    """Latest persisted immediate snapshot, or a fresh native-order snapshot (persisted). Never calls M3."""
+    """Latest persisted immediate snapshot for active window, or rebuild. Never calls M3."""
+    metrics = _active_window_metrics(conn, session_id, active_window_max=active_window_max)
+    active_count = int(metrics["active_count"])
     header = _load_latest_snapshot_header(conn, session_id)
     if header is None:
-        return build_immediate_feed_snapshot(conn, session_id, limit=limit, persist=True)
-    current_candidate_count = count_candidate_items(conn, session_id)
+        return build_immediate_feed_snapshot(
+            conn, session_id, limit=limit, persist=True, active_window_max=active_window_max
+        )
     latest_score_at = _latest_m3_score_at(conn, session_id)
-    if int(header["candidate_count"]) != current_candidate_count:
-        return build_immediate_feed_snapshot(conn, session_id, limit=limit, persist=True)
+    if int(header["candidate_count"]) != active_count:
+        return build_immediate_feed_snapshot(
+            conn, session_id, limit=limit, persist=True, active_window_max=active_window_max
+        )
     if latest_score_at is not None and str(latest_score_at) > str(header["created_at"]):
-        return build_immediate_feed_snapshot(conn, session_id, limit=limit, persist=True)
-
+        return build_immediate_feed_snapshot(
+            conn, session_id, limit=limit, persist=True, active_window_max=active_window_max
+        )
     snapshot_id = str(header["snapshot_id"])
     sql = """
         SELECT item_id, snapshot_rank, window_rank, m3_score, tier, serve, reason
@@ -442,7 +639,7 @@ def get_feed_current(
         sql += " LIMIT ?"
         params.append(limit)
     item_rows = conn.execute(sql, params).fetchall()
-    items = []
+    items: list[dict[str, Any]] = []
     for row in item_rows:
         rank = int(row["snapshot_rank"])
         score = row["m3_score"]
@@ -459,6 +656,7 @@ def get_feed_current(
                 "reason": row["reason"],
             }
         )
+    items = _enrich_snapshot_feed_items(conn, session_id, items)
     return {
         "session_id": session_id,
         "snapshot_id": snapshot_id,
@@ -466,7 +664,8 @@ def get_feed_current(
         "arm": AMBIENT_M3_ARM,
         "effective_arm": AMBIENT_M3_ARM,
         "created_at": header["created_at"],
-        "candidate_count": int(header["candidate_count"]),
+        "candidate_count": active_count,
+        "active_window_max": active_window_max,
         "ordered_item_ids": [item["item_id"] for item in items],
         "items": items,
     }
@@ -561,21 +760,25 @@ def request_m3_scoring_batches(
     conn: sqlite3.Connection,
     session_id: str,
     *,
-    batch_size: int = 50,
-    max_batches: int = 1,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    max_batches: int = DEFAULT_MAX_BATCHES,
     model_call: ModelCall | None = None,
     rebuild_snapshot: bool = True,
+    active_window_max: int = DEFAULT_ACTIVE_WINDOW_MAX,
 ) -> dict[str, Any]:
-    """Sync: score up to max_batches unscored rows. Default model_call is call_minimax when invoked."""
+    """Sync: score up to max_batches unscored active-window rows."""
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
     if max_batches < 1:
         raise ValueError("max_batches must be >= 1")
 
+    def _unscored_active() -> int:
+        return len(load_unscored_candidate_rows(conn, session_id, active_window_max=active_window_max))
+
     if model_call is None:
         m3_status, m3_error = _m3_availability()
         if m3_status == "unavailable":
-            unscored = max(0, count_candidate_items(conn, session_id) - count_scored_items(conn, session_id))
+            unscored = _unscored_active()
             return {
                 "session_id": session_id,
                 "batches_requested": max_batches,
@@ -595,9 +798,12 @@ def request_m3_scoring_batches(
     items_scored = 0
     model_call_ids: list[str] = []
     last_error: str | None = None
+    snapshot: dict[str, Any] | None = None
 
     for _ in range(max_batches):
-        batch = load_unscored_candidate_rows(conn, session_id, limit=batch_size)
+        batch = load_unscored_candidate_rows(
+            conn, session_id, limit=batch_size, active_window_max=active_window_max
+        )
         if not batch:
             break
         result = score_m3_item_batch(conn, session_id, batch, call_fn)
@@ -609,19 +815,20 @@ def request_m3_scoring_batches(
             if result.get("items_scored", 0) <= 0:
                 break
         batches_completed += 1
-        items_scored += int(result.get("items_scored") or 0)
-        if not result.get("parsed_ok") and int(result.get("items_scored") or 0) <= 0:
+        batch_scored = int(result.get("items_scored") or 0)
+        items_scored += batch_scored
+        if rebuild_snapshot and batch_scored > 0:
+            snapshot = build_immediate_feed_snapshot(
+                conn, session_id, persist=True, active_window_max=active_window_max
+            )
+        if not result.get("parsed_ok") and batch_scored <= 0:
             break
 
-    unscored_remaining = max(0, count_candidate_items(conn, session_id) - count_scored_items(conn, session_id))
+    unscored_remaining = _unscored_active()
     if unscored_remaining == 0 and m3_status not in ("error", "unavailable"):
         m3_status = "idle"
     elif unscored_remaining > 0 and m3_status not in ("error", "unavailable"):
         m3_status = "ready"
-
-    snapshot = None
-    if rebuild_snapshot and items_scored > 0:
-        snapshot = build_immediate_feed_snapshot(conn, session_id, persist=True)
 
     return {
         "session_id": session_id,
@@ -640,8 +847,8 @@ def schedule_m3_scoring_background(
     *,
     db_path: str,
     session_id: str,
-    batch_size: int = 50,
-    max_batches: int = 1,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    max_batches: int = DEFAULT_MAX_BATCHES,
 ) -> None:
     """Run request_m3_scoring_batches on a daemon thread (API BackgroundTasks)."""
     from pathlib import Path
@@ -651,11 +858,13 @@ def schedule_m3_scoring_background(
     if max_batches < 1:
         return
 
-    key = f"{db_path}:{session_id}"
+
+    key = _background_session_key(db_path, session_id)
     with _BACKGROUND_LOCK:
         if key in _RUNNING_BACKGROUND_KEYS:
             return
         _RUNNING_BACKGROUND_KEYS.add(key)
+        _RUNNING_BACKGROUND_SESSIONS.add(session_id)
 
     def _run() -> None:
         conn = connect(Path(db_path))
@@ -671,5 +880,6 @@ def schedule_m3_scoring_background(
             conn.close()
             with _BACKGROUND_LOCK:
                 _RUNNING_BACKGROUND_KEYS.discard(key)
+                _RUNNING_BACKGROUND_SESSIONS.discard(session_id)
 
     threading.Thread(target=_run, daemon=True).start()

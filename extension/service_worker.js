@@ -1,5 +1,8 @@
 const CORE_CANDIDATES = ['http://127.0.0.1:8765', 'http://localhost:8765'];
 const DEFAULTS = { mode: 'native', experimentalReorder: false };
+const M3_AMBIENT_BATCH_SIZE = 50;
+const M3_AMBIENT_MAX_BATCHES = 5;
+const M3_FEED_REQUEST_DEBOUNCE_MS = 1500;
 const queues = { raw: [], items: [], events: [] };
 let flushing = false;
 let m3RequestTimer = null;
@@ -106,19 +109,49 @@ async function fetchFeedCurrent(sessionId, limit) {
   return getJson(path);
 }
 
-async function requestM3FeedScoring(sessionId, options = {}) {
-  const payload = { session_id: sessionId };
-  if (options.batch_size != null) payload.batch_size = options.batch_size;
-  if (options.max_batches != null) payload.max_batches = options.max_batches;
-  return postJson('/feed/m3/request', payload);
+function buildM3FeedRequestOptions(options = {}) {
+  const batch_size =
+    options.batch_size != null && Number.isFinite(Number(options.batch_size))
+      ? Number(options.batch_size)
+      : M3_AMBIENT_BATCH_SIZE;
+  const max_batches =
+    options.max_batches != null && Number.isFinite(Number(options.max_batches))
+      ? Number(options.max_batches)
+      : M3_AMBIENT_MAX_BATCHES;
+  return { batch_size, max_batches };
 }
 
-function scheduleM3FeedRequest(sessionId) {
+function m3StatusWarrantsBackgroundScoring(status) {
+  if (!status || typeof status !== 'object') return false;
+  const unscored = Number(status.unscored_count);
+  if (!Number.isFinite(unscored) || unscored <= 0) return false;
+  const raw = String(status.m3_status ?? status.epoch_status ?? status.phase ?? '').toLowerCase();
+  if (!raw || raw === 'idle' || raw === 'unavailable' || raw === 'complete') return false;
+  if (raw === 'ready' || raw === 'running' || raw.includes('scor') || raw.includes('warm')) return true;
+  if (raw === 'top_ready' || raw === 'scoring_top' || raw === 'scoring_rest') return true;
+  return false;
+}
+
+function maybeScheduleM3ContinuationFromStatus(sessionId, status) {
+  if (!m3StatusWarrantsBackgroundScoring(status)) return;
+  scheduleM3FeedRequest(sessionId);
+}
+
+async function requestM3FeedScoring(sessionId, options = {}) {
+  const { batch_size, max_batches } = buildM3FeedRequestOptions(options);
+  return postJson('/feed/m3/request', {
+    session_id: sessionId,
+    batch_size,
+    max_batches,
+  });
+}
+
+function scheduleM3FeedRequest(sessionId, options = {}) {
   clearTimeout(m3RequestTimer);
   m3RequestTimer = setTimeout(() => {
     m3RequestTimer = null;
-    requestM3FeedScoring(sessionId).catch(() => {});
-  }, 1500);
+    requestM3FeedScoring(sessionId, options).catch(() => {});
+  }, M3_FEED_REQUEST_DEBOUNCE_MS);
 }
 
 async function flush() {
@@ -163,6 +196,12 @@ async function rankViaAmbientFeed(state, refresh) {
   await flush();
   const limit = refresh ? undefined : 500;
   const current = await fetchFeedCurrent(state.sessionId, limit);
+  try {
+    const status = await fetchFeedStatus(state.sessionId);
+    maybeScheduleM3ContinuationFromStatus(state.sessionId, status);
+  } catch {
+    /* status optional for feed read */
+  }
   const mode = 'm3';
   const arm = current.arm ?? 'm3_item_scoring_v0';
   const effective_arm = current.effective_arm ?? arm;
@@ -208,15 +247,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true });
     } else if (msg?.type === 'FEED_STATUS') {
       const data = await fetchFeedStatus(state.sessionId);
+      const mode = state.mode || DEFAULTS.mode;
+      if (mode === 'm3') {
+        maybeScheduleM3ContinuationFromStatus(state.sessionId, data);
+      }
       sendResponse({ ok: true, ...data });
     } else if (msg?.type === 'FEED_CURRENT') {
       const data = await fetchFeedCurrent(state.sessionId, msg.limit);
       sendResponse({ ok: true, ...data });
     } else if (msg?.type === 'REQUEST_M3_FEED') {
-      const data = await requestM3FeedScoring(state.sessionId, {
-        batch_size: msg.batch_size,
-        max_batches: msg.max_batches,
-      });
+      const data = await requestM3FeedScoring(
+        state.sessionId,
+        buildM3FeedRequestOptions({
+          batch_size: msg.batch_size,
+          max_batches: msg.max_batches,
+        }),
+      );
       sendResponse({ ok: true, ...data });
     } else if (msg?.type === 'GET_STATE') {
       let feedStatus = null;
@@ -253,7 +299,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const refresh = !!msg.refresh;
       if (mode === 'm3') {
         if (refresh) {
-          requestM3FeedScoring(state.sessionId).catch(() => {});
+          scheduleM3FeedRequest(state.sessionId);
         }
         sendResponse(await rankViaAmbientFeed(state, refresh));
       } else {

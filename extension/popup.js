@@ -22,12 +22,16 @@ async function load() {
       if (!s) {
         m3El.textContent = online ? 'M3 ambient: no status yet (scoring may be pending)' : 'M3 ambient: core offline';
       } else {
-        const captured = s.candidate_count ?? '—';
+        const seen = s.total_seen_count ?? '—';
+        const active = s.candidate_count ?? '—';
+        const expired = s.expired_count ?? '—';
+        const phase = s.phase ?? s.epoch_status ?? '—';
+        const topReady = s.top_ready ? 'yes' : 'no';
+        const topK = s.top_k ?? 10;
         const scored = s.scored_count ?? '—';
         const pending = s.unscored_count ?? '—';
-        const status = s.m3_status ?? s.status ?? 'idle';
-        const queue = s.m3_queue_depth != null ? ` · queue ${s.m3_queue_depth}` : '';
-        m3El.textContent = `M3: ${scored}/${captured} scored · ${pending} pending · ${status}${queue}`;
+        const m3 = s.m3_status ?? 'idle';
+        m3El.textContent = `M3 · phase ${phase} · seen ${seen} · active ${active} · expired ${expired} · top ${topK} ready ${topReady} · ${scored} scored · ${pending} pending · ${m3}`;
       }
     } else {
       m3El.style.display = 'none';

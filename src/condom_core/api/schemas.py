@@ -26,4 +26,4 @@ class EventsIn(BaseModel):
 class FeedM3RequestIn(BaseModel):
     session_id: str
     batch_size: int = Field(default=50, ge=1, le=64)
-    max_batches: int = Field(default=1, ge=1, le=32)
+    max_batches: int = Field(default=5, ge=1, le=32)

@@ -6,6 +6,7 @@
   let rankById = new Map();
   let itemMetaById = new Map();
   let ambientFeedStatus = null;
+  let topShelfItems = [];
 
   const send = (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
 
@@ -15,16 +16,20 @@
     rankById = new Map();
     itemMetaById = new Map();
     ambientFeedStatus = null;
+    topShelfItems = [];
     for (const article of document.querySelectorAll('article')) {
       const badge = article.querySelector(':scope > .lens-m0-badge');
       if (badge) badge.remove();
       article.removeAttribute('data-lens-m0-top');
       article.removeAttribute('data-lens-m0-low');
+      article.removeAttribute('data-lens-m0-pending');
       const cell = cellFor(article);
       if (cell) cell.style.order = '';
     }
     const statusEl = document.getElementById('lens-m0-status');
     if (statusEl) statusEl.textContent = 'Lens M0';
+    const shelf = document.getElementById('lens-m0-top-shelf');
+    if (shelf) shelf.remove();
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
@@ -114,9 +119,17 @@
     style.id = 'lens-m0-style';
     style.textContent = `
       .lens-m0-badge { position:absolute; z-index:999999; right:8px; top:4px; font:12px/1.2 system-ui; padding:2px 6px; border-radius:999px; background:#111827; color:white; opacity:.85; pointer-events:none; }
+      .lens-m0-badge.lens-m0-badge-pending { background:#374151; font-size:11px; }
       [data-lens-m0-top="1"] { outline:2px solid rgba(14,165,233,.65) !important; outline-offset:-2px; }
       [data-lens-m0-low="1"] { opacity:.45 !important; }
-      #lens-m0-status { position:fixed; z-index:999999; bottom:12px; right:12px; background:#111827; color:white; padding:6px 9px; border-radius:8px; font:12px system-ui; pointer-events:none; opacity:.82; }
+      [data-lens-m0-pending="1"]:not([data-lens-m0-low="1"]) { opacity:.78 !important; }
+      #lens-m0-status { position:fixed; z-index:999999; bottom:12px; right:12px; background:#111827; color:white; padding:6px 9px; border-radius:8px; font:12px system-ui; pointer-events:none; opacity:.82; max-width:min(92vw, 420px); }
+      #lens-m0-top-shelf { position:fixed; z-index:999998; top:12px; left:12px; width:min(280px, 42vw); max-height:min(50vh, 360px); overflow:auto; background:rgba(17,24,39,.92); color:#f9fafb; border-radius:10px; padding:8px 10px; font:11px/1.35 system-ui; pointer-events:none; opacity:.88; box-shadow:0 4px 14px rgba(0,0,0,.25); }
+      #lens-m0-top-shelf .lens-m0-shelf-title { font-weight:600; font-size:11px; margin-bottom:6px; color:#e5e7eb; }
+      #lens-m0-top-shelf .lens-m0-shelf-row { padding:5px 0; border-top:1px solid rgba(255,255,255,.08); }
+      #lens-m0-top-shelf .lens-m0-shelf-row:first-of-type { border-top:none; }
+      #lens-m0-top-shelf .lens-m0-shelf-meta { color:#9ca3af; font-size:10px; }
+      #lens-m0-top-shelf .lens-m0-shelf-snippet { color:#d1d5db; margin-top:2px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
     `;
     document.documentElement.appendChild(style);
   }
@@ -125,11 +138,14 @@
     if (mode === 'm3') {
       const s = ambientFeedStatus;
       if (!s) return 'Lens M0 · m3 · waiting for core';
-      const captured = s.candidate_count ?? s.captured ?? '—';
-      const scored = s.scored_count ?? s.scored ?? '—';
-      const pending = s.unscored_count ?? s.pending ?? (Number.isFinite(captured) && Number.isFinite(scored) ? Math.max(0, captured - scored) : '—');
-      const status = s.m3_status ?? s.status ?? 'idle';
-      return `Lens M0 · m3 · ${scored}/${captured} scored · ${pending} pending · ${status}`;
+      const phase = s.phase ?? s.epoch_status ?? '—';
+      const topK = s.top_k ?? 10;
+      const topReady = s.top_ready ? 'top ready' : 'top loading';
+      const active = s.candidate_count ?? '—';
+      const scored = s.scored_count ?? '—';
+      const pending = s.unscored_count ?? '—';
+      const m3 = s.m3_status ?? 'idle';
+      return `Lens M0 · m3 · ${phase} · ${topReady} (${topK}) · ${scored}/${active} scored · ${pending} pending · ${m3}`;
     }
     return `Lens M0 · ${mode}`;
   }
@@ -143,6 +159,47 @@
       document.documentElement.appendChild(el);
     }
     el.textContent = formatAmbientStatus();
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function showTopShelf() {
+    injectStyles();
+    let shelf = document.getElementById('lens-m0-top-shelf');
+    if (mode !== 'm3') {
+      if (shelf) shelf.remove();
+      return;
+    }
+    const topK = ambientFeedStatus?.top_k ?? 10;
+    const phase = ambientFeedStatus?.phase ?? ambientFeedStatus?.epoch_status ?? '';
+    if (!topShelfItems.length && !ambientFeedStatus) {
+      if (shelf) shelf.remove();
+      return;
+    }
+    if (!shelf) {
+      shelf = document.createElement('div');
+      shelf.id = 'lens-m0-top-shelf';
+      document.documentElement.appendChild(shelf);
+    }
+    const title = `M3 top ${topK}${phase ? ` · ${phase}` : ''}`;
+    const rowsHtml = topShelfItems.map((row) => {
+      const seen = seenItems.get(row.item_id);
+      const author = row.author_handle || seen?.author_handle || '?';
+      const rawScore = row.m3_score ?? row.score;
+      const scored = rawScore != null && !Number.isNaN(Number(rawScore));
+      const scoreTxt = scored ? Math.round(Number(rawScore)) : 'pending';
+      const tier = row.tier ? ` · ${escapeHtml(String(row.tier))}` : '';
+      const snippet = ((row.text || seen?.text || '') + '').trim().slice(0, 100);
+      const snip = snippet ? `<div class="lens-m0-shelf-snippet">${escapeHtml(snippet)}</div>` : '';
+      return `<div class="lens-m0-shelf-row"><div class="lens-m0-shelf-meta">#${row.rank} · @${escapeHtml(author)} · ${scoreTxt}${tier}</div>${snip}</div>`;
+    }).join('');
+    shelf.innerHTML = `<div class="lens-m0-shelf-title">${escapeHtml(title)}</div>${rowsHtml || '<div class="lens-m0-shelf-meta">loading top…</div>'}`;
   }
 
   function cellFor(article) {
@@ -161,6 +218,7 @@
         if (badge) badge.remove();
         article.removeAttribute('data-lens-m0-top');
         article.removeAttribute('data-lens-m0-low');
+        article.removeAttribute('data-lens-m0-pending');
         if (cell) cell.style.order = '';
         continue;
       }
@@ -170,6 +228,7 @@
         if (badge) badge.remove();
         article.removeAttribute('data-lens-m0-top');
         article.removeAttribute('data-lens-m0-low');
+        article.removeAttribute('data-lens-m0-pending');
         if (cell && !experimentalReorder) cell.style.order = '';
         continue;
       }
@@ -179,17 +238,28 @@
         article.appendChild(badge);
       }
       if (mode === 'm3') {
-        const score = meta.score != null ? Math.round(Number(meta.score)) : null;
+        const rawScore = meta.score ?? meta.m3_score;
+        const scored = rawScore != null && !Number.isNaN(Number(rawScore));
+        const score = scored ? Math.round(Number(rawScore)) : null;
         const tier = meta.tier ? String(meta.tier) : '';
-        badge.textContent = score != null && !Number.isNaN(score)
-          ? `m3 #${rank}${tier ? ` · ${tier}` : ''} (${score})`
-          : `m3 #${rank}${tier ? ` · ${tier}` : ''}`;
-        const serve = meta.serve;
-        const top = tier === 'gold' || rank <= 12;
-        const low = serve === false || rank > 40;
-        article.setAttribute('data-lens-m0-top', top && serve !== false ? '1' : '0');
-        article.setAttribute('data-lens-m0-low', low ? '1' : '0');
+        badge.classList.toggle('lens-m0-badge-pending', !scored);
+        if (!scored) {
+          badge.textContent = 'm3 pending';
+          article.setAttribute('data-lens-m0-pending', '1');
+          article.setAttribute('data-lens-m0-top', '0');
+          article.setAttribute('data-lens-m0-low', '0');
+        } else {
+          article.removeAttribute('data-lens-m0-pending');
+          badge.textContent = `m3 #${rank}${tier ? ` · ${tier}` : ''} (${score})`;
+          const serve = meta.serve;
+          const top = tier === 'gold' || rank <= 12;
+          const low = serve === false || rank > 40;
+          article.setAttribute('data-lens-m0-top', top && serve !== false ? '1' : '0');
+          article.setAttribute('data-lens-m0-low', low ? '1' : '0');
+        }
       } else {
+        badge.classList.remove('lens-m0-badge-pending');
+        article.removeAttribute('data-lens-m0-pending');
         badge.textContent = `${mode} #${rank}`;
         article.setAttribute('data-lens-m0-top', rank <= 12 ? '1' : '0');
         article.setAttribute('data-lens-m0-low', rank > 40 ? '1' : '0');
@@ -205,6 +275,7 @@
         cell.style.order = '';
       }
     }
+    showTopShelf();
   }
 
   function scan() {
@@ -245,14 +316,27 @@
       itemMetaById = new Map(
         items.map((row) => [
           row.item_id,
-          { score: row.score, tier: row.tier, serve: row.serve, reason: row.reason },
+          {
+            score: row.score ?? row.m3_score,
+            m3_score: row.m3_score ?? row.score,
+            tier: row.tier,
+            serve: row.serve,
+            reason: row.reason,
+            author_handle: row.author_handle,
+            text: row.text,
+            url: row.url,
+          },
         ]),
       );
+      const topK = ambientFeedStatus?.top_k ?? 10;
+      topShelfItems = items.slice(0, topK);
     } else if (mode === 'cheap') {
+      topShelfItems = [];
       itemMetaById = new Map();
       const ranked = await send({ type: 'RANK', mode: 'cheap', refresh: force });
       rankById = new Map((ranked.items || []).map((row) => [row.item_id, row.rank]));
     } else {
+      topShelfItems = [];
       rankById = new Map();
       itemMetaById = new Map();
     }

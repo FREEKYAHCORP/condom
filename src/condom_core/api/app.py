@@ -77,7 +77,7 @@ def rank(
 def feed_status(session_id: str = Query(..., min_length=1)):
     conn = _conn()
     try:
-        return load_feed_status(conn, session_id)
+        return load_feed_status(conn, session_id, db_path=str(DB_PATH))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -98,7 +98,7 @@ def feed_m3_current(
 def feed_m3_request(payload: FeedM3RequestIn):
     conn = _conn()
     try:
-        status = load_feed_status(conn, payload.session_id)
+        status = load_feed_status(conn, payload.session_id, db_path=str(DB_PATH))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     if status.get("unscored_count", 0) <= 0:
@@ -115,7 +115,7 @@ def feed_m3_request(payload: FeedM3RequestIn):
         batch_size=payload.batch_size,
         max_batches=payload.max_batches,
     )
-    status = load_feed_status(conn, payload.session_id)
+    status = load_feed_status(conn, payload.session_id, db_path=str(DB_PATH))
     return {
         "ok": True,
         "scheduled": True,
