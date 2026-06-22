@@ -218,6 +218,18 @@ def _normalize_ambient_m3_score_entries(items: list, allowed: set[str]) -> list[
         raise ValueError("items must be a non-empty array")
     seen: set[str] = set()
     normalized: list[dict] = []
+    missing = set(allowed)
+
+    def _repair_near_id(raw_id: str) -> str | None:
+        candidates = []
+        for candidate_id in missing:
+            if len(candidate_id) != len(raw_id):
+                continue
+            distance = sum(1 for left, right in zip(candidate_id, raw_id) if left != right)
+            if distance <= 4:
+                candidates.append(candidate_id)
+        return candidates[0] if len(candidates) == 1 else None
+
     for idx, entry in enumerate(items):
         if not isinstance(entry, dict):
             raise ValueError(f"items[{idx}] must be an object")
@@ -226,10 +238,14 @@ def _normalize_ambient_m3_score_entries(items: list, allowed: set[str]) -> list[
             raise ValueError(f"items[{idx}].item_id must be a non-empty string")
         item_id = item_id.strip()
         if item_id not in allowed:
-            raise ValueError(f"items[{idx}].item_id {item_id!r} not in candidate set")
+            repaired = _repair_near_id(item_id)
+            if repaired is None:
+                raise ValueError(f"items[{idx}].item_id {item_id!r} not in candidate set")
+            item_id = repaired
         if item_id in seen:
             raise ValueError(f"duplicate item_id {item_id!r}")
         seen.add(item_id)
+        missing.discard(item_id)
         try:
             score = float(entry.get("score"))
         except (TypeError, ValueError) as exc:
